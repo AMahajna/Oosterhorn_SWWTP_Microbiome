@@ -1,0 +1,1242 @@
+################################################################################
+##Create folder for project organization
+
+if(!dir.exists("input_data")){dir.create("input_data")}
+if(!dir.exists("output_data")){dir.create("output_data")}
+if(!dir.exists("figures")){dir.create("figures")}
+if(!dir.exists("scripts")){dir.create("scripts")}
+
+################################################################################
+##load packages 
+
+source(file = "scripts/install_load_packages.r")
+
+################################################################################
+##Load data
+
+#Microbiome Data for assay and rowData in TSE 
+table_raw <- read_csv(file = "input_data/4717_groupby_filtered_all_summary_pathways_taxonomy_abs.csv", show_col_types = FALSE)
+
+#Read in sample data 
+
+#Relevant process data 
+process_data <- read_csv(file = "input_data/relevant_process_data.csv", show_col_types = FALSE)
+#The measure rarity is not used here 
+process_data <- process_data[-13]
+#Check the class of each column to be numeric 
+#sapply(process_data,class)
+
+
+################################################################################
+##EDA for taxonomy 
+sapply(table_raw[7:38],class)
+
+
+
+################################################################################
+##Tidying and subsetting data
+
+#Merge uniprot name and code to have unique names 
+table_raw$uniprot_species_name = paste(table_raw$species_strain,table_raw$uniprot_name,table_raw$uniprot_acc, sep="_")
+
+#assay data is the experimental result 
+assay_data <-
+  table_raw %>%  
+  dplyr::select(uniprot_species_name, starts_with("47")) %>% 
+  rename_with(~str_sub(., end = 8))
+
+#Cleaning "<DL" values= replace less than detection level with zero
+assay_data =  data.frame(lapply(assay_data, function(x) {
+  gsub("<DL", 0, x)
+}))
+
+#Checking the class of the values in the assay data
+#sapply(assay_data,class)
+
+#Changing the class of the assay data to numeric
+assay_data[,2:33] <- sapply(assay_data[,2:33],as.numeric)
+
+#Checking class and dimensionality
+#sapply(assay_data,class)
+#dim(assay_data)
+
+#convert assay data to datafrme format 
+assay_data <- 
+  assay_data %>% 
+  as_tibble() %>% 
+  rename_with(~gsub("X","",.x)) %>% 
+  as.data.frame()
+
+#rownames is for row data that contains gene data 
+rownames(assay_data) = assay_data$uniprot_
+
+#Here we take only numeric data and convert to matrix for assay data 
+assay_data = assay_data[,-1] %>% as.matrix()
+
+#Here, we extract relevant genome data 
+row_data_tax <-
+  table_raw %>% 
+  dplyr::select(uniprot_species_name,taxid:domain)
+
+#column data is corresponding to the sample information
+samdat = read_excel("input_data/WWTP_overview_samples_20180125.xlsx") %>%
+  filter(NGS_performed == "YES") %>% 
+  dplyr::select(sampleid = MonsterCodeBC, everything()) 
+
+''' need to recheck this
+# I think it is better to take input data instead 
+process_data = read_csv("output_data/KeyFeatures.csv") %>% 
+  select(-Season)
+
+samdat <- merge(samdat, process_data, by = "Sample_Date", all.x = TRUE)
+'''
+#Not relevant at the moment 
+#  mutate(Sample_Date=lubridate::as_date(Sample_Date))
+#mutate(Sample_Date=lubridate::as_date(Sample_Date,format="%d-%m-%Y"))
+
+#additional data 
+sample_data <-
+  table_raw %>%  
+  dplyr::select(starts_with("47")) %>%
+  colnames() %>% 
+  data.frame(check.names = T)
+colnames(sample_data) = "sampleid"
+samdf = data.frame(sample_data)
+
+#reorganizing for next step
+table_raw <- table_raw %>%
+  dplyr::select(uniprot_species_name, everything())
+
+#splitting additional data 
+col_data <- 
+  table_raw %>% 
+  dplyr::select(uniprot_species_name:info) %>% 
+  dplyr::select(uniprot_species_name,everything())
+
+#Functional data of enzymes  
+row_data_genes <-
+  table_raw %>% 
+  dplyr::select(uniprot_species_name,kegg_reaction_number:go_number) %>% 
+  mutate_all(funs(str_replace(., "_","NA"))) %>% 
+  mutate_all(funs(str_replace(., "-$","NA")))  
+
+# reorder taxonomy 
+#Error: Taxonomic ranks are not in order. Please reorder columns, which #correspond to taxonomic ranks like this:
+#'domain', 'kingdom', 'phylum', 'class', 'order', 'family', 'genus', 'species'.
+#rename sub_domain to kingdom
+
+names(row_data_tax)[names(row_data_tax) == 'sub_domain'] <- "kingdom"
+names(row_data_tax)[names(row_data_tax) == 'species'] <- "species_missing"
+names(row_data_tax)[names(row_data_tax) == 'species_strain'] <- "species"
+colnames(row_data_tax)
+
+row_data_tax_reorder = select(row_data_tax,uniprot_species_name, domain, kingdom, phylum, class, order, family, genus,species, everything())
+#library(stats)
+colnames(row_data_tax_reorder) <- c('uniprot_species_name', 'Domain', 'Kingdom', 'Phylum', 'Class', 'Order', 'Family', 'Genus','Species',"taxid","species_missing")
+
+#Create TSE 
+#Add to colData the process parameters
+assays = SimpleList(counts = assay_data)
+colData = data.frame(samdat)
+colData$Year_Sample<-as.character(colData$Year_Sample)
+rowData = data.frame(row_data_tax_reorder)
+#altExp(tse, "Function") <- 
+# modify the Description entries
+#colData(tse)$Description <- paste(colData(tse)$Description, "modified description")
+# view modified variable
+#head(tse$Description)
+# simulate new data
+#new_data <- runif(ncol(tse))
+# store new data as new variable in colData
+#colData(tse)$NewVariable <- new_data
+# view new variable
+#head(tse$NewVariable)
+
+tse<- TreeSummarizedExperiment(assays = assays,
+                               colData = colData,
+                               rowData = rowData
+)
+
+
+tse <- transformAssay(tse, method = "relabundance")
+
+
+#Abundance
+plotAbundanceDensity(tse, layout = "jitter", assay.type = "relabundance",
+                     n = 40, point_size=1, point_shape=19, point_alpha=0.1) + 
+  scale_x_log10(label=scales::percent)
+
+
+unique(tse$Year_Sample)
+tse$Year_Sample%>% table()
+
+unique(rowData(tse)$Phylum)
+rowData(tse)$Phylum %>% table()
+
+
+#For several custom analysis and visualization packages, 
+#such as those from tidyverse, the SE data can be converted to a long data.frame
+#format with meltAssay
+molten_tse <- mia::meltAssay(tse,
+                             add_row_data = TRUE,
+                             add_col_data = TRUE,
+                             assay.type = "relabundance")
+#molten_tse
+#dim(tse) 
+
+# Not agglomerated data
+tse_subset_by_feature <- tse[rowData(tse)$Phylum %in% c("Acidobacteria","Actinobacteria") & !is.na(rowData(tse)$Phylum), ]
+
+# Show dimensions
+#dim(tse_subset_by_feature)
+
+# Agglomerate by phylum
+tse_phylum <- tse %>% mergeFeaturesByRank(rank = "Phylum")
+
+# Subset by feature and remove NAs
+tse_phylum_subset_by_feature <- tse_phylum[rowData(tse_phylum)$Phylum %in% c("Acidobacteria","Actinobacteria") & !is.na(rowData(tse_phylum)$Phylum), ]
+
+# Show dimensions
+dim(tse_phylum_subset_by_feature)
+
+# Subset by sample and feature and remove NAs
+tse_subset_by_sample_feature <- tse[rowData(tse)$Phylum %in% c("Acidobacteria","Actinobacteria") & !is.na(rowData(tse)$Phylum), tse$Year_Sample %in% c("2015", "2016")]
+
+# Show dimensions
+dim(tse_subset_by_sample_feature)
+
+#split by ranks
+altExps(tse) <- splitByRanks(tse)
+altExps(tse)
+
+#split on other matters
+tse_year = splitOn(tse, "Year_Sample")
+tse_year
+
+#Abundance: The relative abundance values for the top-5 taxonomic features can be 
+#visualized as a density plot over a log scaled axis
+plotAbundanceDensity(tse, layout = "density", assay.type = "relabundance",
+                     n = 5, colour_by="Year_Sample", point_alpha=1/10) +
+  scale_x_log10()
+
+#Prevalence:
+#Prevalence quantifies the frequency of samples where certain microbes were 
+#detected (above a given detection threshold). The prevalence can be given as 
+#sample size (N) or percentage (unit interval).
+head(getPrevalence(tse, detection = 1/100, sort = TRUE, as_relative = TRUE))
+
+head(getPrevalence(tse, detection = 1, sort = TRUE, assay.type = "counts",
+                   as_relative = FALSE))
+
+#Prevalence Analysis: 
+head(getPrevalence(tse, rank = "Phylum", detection = 1/100, sort = TRUE,
+                   assay.type = "counts", as_relative = TRUE))
+
+#If you only need the names of the prevalent taxa, getPrevalentFeatures is 
+#available. This returns the taxa that exceed the given prevalence 
+#and detection thresholds.
+getPrevalentFeatures(tse, detection = 0, prevalence = 80/100)
+prev <- getPrevalentFeatures(tse, detection = 0, prevalence = 80/100,
+                             rank = "Phylum", sort = TRUE)
+prev
+
+#Rare taxa
+#more about that in the PDF
+getRareFeatures(tse, detection = 0, prevalence = 80/100)
+subsetByRareFeatures(tse, detection = 0, prevalence = 80/100)
+
+#Plot prevalence 
+tse_domain <- mergeFeaturesByRank(tse, "Domain", na.rm=TRUE)
+altExp(tse, "Domain") <- tse_domain
+
+rowData(altExp(tse,"Domain"))$prevalence <- 
+  getPrevalence(altExp(tse,"Domain"), detection = 1/100, sort = FALSE,
+                assay.type = "counts", as_relative = TRUE)
+
+library(scater)
+plotRowData(altExp(tse,"Domain"), "prevalence", colour_by = "Domain")
+
+#Prevalence tree
+
+altExps(tse) <- splitByRanks(tse)
+altExps(tse) <-
+  lapply(altExps(tse),
+         function(y){
+           rowData(y)$prevalence <- 
+             getPrevalence(y, detection = 1/100, sort = FALSE,
+                           assay.type = "counts", as_relative = TRUE)
+           y
+         })
+top_phyla <- getTopFeatures(altExp(tse,"Phylum"),
+                            method="prevalence",
+                            top=5L,
+                            assay.type="counts")
+top_phyla_mean <- getTopFeatures(altExp(tse,"Phylum"),
+                                 method="mean",
+                                 top=5L,
+                                 assay.type="counts")
+x <- unsplitByRanks(tse, ranks = taxonomyRanks(tse)[1:6])
+x <- addTaxonomyTree(x)
+
+library(miaViz)
+
+#Figure 5.1: Prevalence of top phyla as judged by prevalence
+#plotRowTree(x[rowData(x)$Phylum %in% top_phyla,],
+edge_colour_by = "Phylum",
+tip_colour_by = "prevalence",
+node_colour_by = "prevalence")
+
+#Figure 5.2: Prevalence of top phyla as judged by mean abundance
+Tree =plotRowTree(x[rowData(x)$Phylum %in% top_phyla_mean,],
+                  edge_colour_by = "Phylum",
+                  tip_colour_by = "prevalence",
+                  node_colour_by = "prevalence")
+pdf("figures/Tree.pdf")
+print(Tree)
+dev.off() 
+
+
+#Quality Control 
+#Top Taxa 
+# Pick the top taxa
+top_features <- getTopFeatures(tse, method="median", top=10)
+
+# Check the information for these
+rowData(tse)[top_features, taxonomyRanks(tse)]
+
+#Library Size/Read Count 
+#The total counts/sample can be calculated using perCellQCMetrics/addPerCellQC
+#from the scater package. The former one just calculates the values,
+#whereas the latter one directly adds them to colData.
+
+library(scater)
+perCellQCMetrics(tse)
+tse <- addPerCellQC(tse)
+#colData(tse)
+
+
+#plotting library size 
+library(ggplot2)
+
+p1 <- ggplot(as.data.frame(colData(tse))) +
+  geom_histogram(aes(x = sum), color = "black", fill = "gray", bins = 30) +
+  labs(x = "Library size", y = "Frequency (n)") + 
+  # scale_x_log10(breaks = scales::trans_breaks("log10", function(x) 10^x), 
+  # labels = scales::trans_format("log10", scales::math_format(10^.x))) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), # Removes the grid
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        axis.line = element_line(colour = "black")) # Adds y-axis
+
+library(dplyr)
+df <- as.data.frame(colData(tse)) %>%
+  arrange(sum) %>%
+  mutate(index = 1:n())
+p2 <- ggplot(df, aes(y = index, x = sum/1e6)) +
+  geom_point() +  
+  labs(x = "Library size (million reads)", y = "Sample index") +  
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), # Removes the grid
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        axis.line = element_line(colour = "black")) # Adds y-axis
+
+library(patchwork)
+LibrarySize =p1 + p2
+
+#png("figures/LibrarySize.png")
+#print(LibrarySize)
+#dev.off()
+
+pdf("figures/LibrarySize.pdf")
+print(LibrarySize)
+dev.off() 
+
+#ggsave("figures/LibrarySize.png", plot = p1+p2)
+
+#Incorporate the Maybe "season" data into colData 
+#Figure 5.4: Library sizes per sample.
+#Figure 5.5: Library sizes per sample type.
+
+#Chapter: Taxonomic information 
+#we will refer to co-abundant groups as CAGs, 
+#which are clusters of taxa that co-vary across samples.
+#checkTaxonomy(tse)
+#Since the rowData can contain other data, 
+#taxonomyRanks will return the columns mia assumes to contain the taxonomic information.
+#taxonomyRanks(tse)
+#rowData(tse)[, taxonomyRanks(tse)]
+#all(!taxonomyRankEmpty(tse, rank = "Species"))
+#table(taxonomyRankEmpty(tse, rank = "Species"))
+#table(taxonomyRankEmpty(tse, rank = "Genus"))
+#head(getTaxonomyLabels(tse,with_rank = TRUE))
+
+#Generate a taxonomic tree on the fly
+taxonomyTree(tse)
+tse <- addTaxonomyTree(tse)
+#tse
+
+#assay(altExp(tse, "Family"), "relabundance")[1:5, 1:7]
+
+#Rare: 
+#Rare taxa can also be aggregated into a single group “Other” instead of 
+#filtering them out. A suitable function for this is mergeFeaturesByPrevalence.
+altExp(tse, "Species_byPrevalence") <- mergeFeaturesByPrevalence(tse, 
+                                                                 rank = "Species", 
+                                                                 other_label = "Other", 
+                                                                 prevalence = 5 / 100, 
+                                                                 detection = 0, 
+                                                                 as_relative = T)
+altExp(tse, "Species_byPrevalence")
+
+assay(altExp(tse, "Species_byPrevalence"), "relabundance")[88:92, 1:7]
+
+#Taxa Clustering 
+#library(bluster)
+# The result of the CLR transform is stored in the assay clr
+#tse <- transformAssay(tse, method = "clr", pseudocount = 1)
+
+#tse <- transformAssay(tse, assay.type = "clr", method = "z", 
+#                      MARGIN = "features")
+
+# Cluster (with euclidean distance) on the features of the z assay
+#tse <- cluster(tse,
+#               assay.type = "z",
+#               clust.col = "hclustEuclidean",
+#               MARGIN = "features",
+#               HclustParam(dist.fun = stats::dist, method = "ward.D2"))
+
+# Declare the Kendall dissimilarity computation function
+#kendall_dissimilarity <- function(x) {
+#  as.dist(1 - cor(t(x), method = "kendall"))
+#}
+
+# Cluster (with Kendall dissimilarity) on the features of the z assay
+#tse <- cluster(tse,
+#               assay.type = "z",
+#               clust.col = "hclustKendall",
+#               MARGIN = "features",            
+#               HclustParam(dist.fun = kendall_dissimilarity, method = "ward.D2"))
+
+# Checking the clusters
+clusters_euclidean <- rowData(tse)$hclustEuclidean
+head(clusters_euclidean, 10)
+clusters_kendall <- rowData(tse)$hclustKendall
+head(clusters_kendall, 10)
+
+#plotting clusters 
+library(ggplot2)
+library(patchwork) # TO arrange several plots as a grid
+plot1 <- ggplot(as.data.frame(rowData(tse)), aes(x = clusters_euclidean)) +
+  geom_bar() +
+  labs(title = "CAG size distribution (Euclidean distance)",
+       x = "Clusters", y = "Feature count (n)")
+plot2 <- ggplot(as.data.frame(rowData(tse)), aes(x = clusters_kendall)) +
+  geom_bar() +
+  labs(title = "CAG size distribution (1 - tau)",
+       x = "Clusters", y = "Feature count (n)")
+TaxaClusters =  plot1 + plot2 + plot_layout(ncol = 2)
+TaxaClusters
+pdf("figures/TaxaClusters.pdf")
+print(TaxaClusters)
+dev.off() 
+
+#Data Transformation 
+tse <- transformAssay(tse, assay.type = "counts", method = "relabundance", pseudocount = 1)
+tse <- transformAssay(x = tse, assay.type = "relabundance", method = "clr", 
+                      pseudocount = 1, name = "clr")
+#head(assay(tse, "clr"))
+
+#In ‘pa’ transformation, abundance table is converted to present/absent table.
+tse <- transformAssay(tse, method = "pa")
+#head(assay(tse, "pa"))
+
+# list of abundance tables that assays slot contains
+assays(tse)
+
+tse <- mia::estimateRichness(tse, 
+                             assay.type = "counts", 
+                             index =   c("ace", "chao1", "hill", "observed"), 
+                             name=  c("ace", "chao1", "hill", "observed"))
+
+#head(tse$observed)
+
+#Figure 7.1: Richness estimates plotted grouped by sampleid colored by year
+library(scater)
+plotColData(tse, 
+            "observed", 
+            "sampleid", 
+            colour_by = "Year_Sample") +
+  theme(axis.text.x = element_text(angle=45,hjust=1)) + 
+  ylab(expression(Richness[Observed]))
+
+tse <- mia::estimateDiversity(tse, 
+                              assay.type = "counts",
+                              index =  c("coverage", "fisher", "gini_simpson", "inverse_simpson",
+                                         "log_modulo_skewness", "shannon"), 
+                              name =  c("coverage", "fisher", "gini_simpson", "inverse_simpson",
+                                        "log_modulo_skewness", "shannon"))
+#head(tse$log_modulo_skewness)
+
+library(ggsignif)
+library(ggplot2)
+library(patchwork)
+library(ggsignif)
+
+# Subsets the data. Takes only those samples that are from feces, skin, or tongue,
+# and creates data frame from the collected data
+df <- as.data.frame(colData(tse)[tse$Year_Sample)
+
+# Changes old levels with new levels
+df$Year_Sample <- factor(df$Year_Sample)
+
+# For significance testing, all different combinations are determined
+comb <- split(t(combn(levels(df$Year_Sample), 2)), 
+              seq(nrow(t(combn(levels(df$Year_Sample), 2)))))
+
+ggplot(df, aes(x = Year_Sample, y = shannon)) +
+  # Outliers are removed, because otherwise each data point would be plotted twice; 
+  # as an outlier of boxplot and as a point of dotplot.
+  geom_boxplot(outlier.shape = NA) + 
+  geom_jitter(width = 0.2) + 
+  geom_signif(comparisons = comb, map_signif_level = FALSE) +
+  theme(text = element_text(size = 10))
+#Option to plot 
+
+#Faith phylogenetic diversity
+tse <- mia::estimateFaith(tse,
+                          assay.type = "counts")
+head(tse$faith)
+#Evenness 
+tse <- estimateEvenness(tse, 
+                        assay.type = "counts", 
+                        index=c("camargo", "pielou", "simpson_evenness", "evar", "bulla"),
+                        name = c("camargo", "pielou", "simpson_evenness", "evar", "bulla"))
+head(tse$camargo)
+
+#Donminance
+tse <- estimateDominance(tse, 
+                         assay.type = "counts", 
+                         index=c("absolute", "dbp", "core_abundance", "gini", "dmn", "relative",
+                                 "simpson_lambda"), 
+                         name = c("absolute", "dbp", "core_abundance", "gini", "dmn", "relative",
+                                  "simpson_lambda"))
+
+head(tse$relative)
+
+#Rarity 
+tse <- mia::estimateDiversity(tse, 
+                              assay.type = "counts",
+                              index = "log_modulo_skewness")
+
+install.packages("remotes")
+remotes::install_github("microbiome/microbiome")
+
+# getRareFeatures returns the inverse
+rare <- getRareFeatures(tse,
+                        rank = "Phylum",
+                        detection = 1/100,
+                        prevalence = 50/100,
+                        as_relative = TRUE)
+head(rare)
+
+#head(getRareTaxa(tse, prevalence = 50/100, include_lowest = FALSE))
+
+
+
+# By default, reference is median of all samples. The name of column where results
+# is "divergence" by default, but it can be specified. 
+tse <- estimateDivergence(tse)
+
+# The method that are used to calculate distance in divergence and 
+# reference can be specified. Here, euclidean distance and dist function from 
+# stats package are used. Reference is the first sample.
+tse <- estimateDivergence(tse, name = "divergence_first_sample", 
+                          reference = assays(tse)$counts[,1], 
+                          FUN = stats::dist, method = "euclidean")
+
+# Reference can also be median or mean of all samples. 
+# By default, divergence is calculated by using median. Here, mean is used.
+tse <- estimateDivergence(tse, name = "divergence_average", reference = "mean")
+
+colData(tse)
+
+#A plot comparing all the diversity measures calculated above and stored in 
+#colData can then be constructed directly.
+plots <- lapply(c("observed", "shannon", "simpson_evenness", "relative", "faith", "log_modulo_skewness"),
+                plotColData,
+                object = tse,
+                x = "Year_Sample",
+                colour_by = "Year_Sample")
+
+plots <- lapply(plots, "+", 
+                theme(axis.text.x = element_blank(),
+                      axis.title.x = element_blank(),
+                      axis.ticks.x = element_blank()))
+
+((plots[[1]] | plots[[2]] | plots[[3]]) / 
+    (plots[[4]] | plots[[5]] | plots[[6]])) +
+  plot_layout(guides = "collect")
+
+#Better to compare each group of measures on its own with correlation analysis 
+
+#Beta Diversity 
+#Comparing communities by beta diversity analysis
+# Load package to plot reducedDim
+library(scater)
+
+# Run PCoA on relabundance assay with Bray-Curtis distances
+tse <- runMDS(tse,
+              FUN = vegan::vegdist,
+              method = "bray",
+              assay.type = "relabundance",
+              name = "MDS_bray")
+
+# Create ggplot object
+p <- plotReducedDim(tse, "MDS_bray")
+
+# Calculate explained variance
+e <- attr(reducedDim(tse, "MDS_bray"), "eig")
+rel_eig <- e / sum(e[e > 0])
+
+# Add explained variance for each axis
+p <- p + labs(x = paste("PCoA 1 (", round(100 * rel_eig[[1]], 1), "%", ")", sep = ""),
+              y = paste("PCoA 2 (", round(100 * rel_eig[[2]], 1), "%", ")", sep = ""))
+
+#MDS plot based on the Bray-Curtis distances on the GlobalPattern dataset.
+p
+
+#Factors in ordination are: 	Assay type (relabundance/absolute)
+# & the Beta diversity metric (Bray-Curtis, Aitchison,... Jaccard,...)
+#the choice of these three factors can affect the resulting lower-dimensional data
+# Run NMDS on relabundance assay with Bray-Curtis distances
+tse <- runNMDS(tse,
+               FUN = vegan::vegdist,
+               method = "bray",
+               assay.type = "relabundance",
+               name = "NMDS_bray")
+
+# Run MDS on clr assay with Aitchison distances
+tse <- runMDS(tse,
+              FUN = vegan::vegdist,
+              method = "euclidean",
+              assay.type = "clr",
+              name = "MDS_aitchison")
+
+# Run NMDS on clr assay with Euclidean distances
+tse <- runNMDS(tse,
+               FUN = vegan::vegdist,
+               method = "euclidean",
+               assay.type = "clr",
+               name = "NMDS_aitchison")
+
+# Load package for multi-panel plotting
+library(patchwork)
+
+# Generate plots for all 4 reducedDims
+plots <- lapply(c("MDS_bray", "MDS_aitchison",
+                  "NMDS_bray", "NMDS_aitchison"),
+                plotReducedDim,
+                object = tse)
+
+# Generate multi-panel plot
+#Comparison of MDS and NMDS plots based on the Bray-Curtis or 
+#Aitchison distances on the GlobalPattern dataset.
+wrap_plots(plots) +
+  plot_layout(guides = "collect")
+
+#PCA
+tse <- runPCA(tse,
+              name = "PCA",
+              assay.type = "counts",
+              ncomponents = 10)
+
+plotReducedDim(tse, "PCA")
+
+#UMAP for ordination
+tse <- runUMAP(tse,
+               name = "UMAP",
+               assay.type = "counts",
+               ncomponents = 3)
+
+plotReducedDim(tse, "UMAP",
+               ncomponents = c(1:3))
+
+#Explained variance
+# “stress” function measures the difference in pairwise similarities
+# between the data points in the original
+# Load vegan package
+library(vegan)
+
+# Quantify dissimilarities in the original feature space
+x <- assay(tse, "relabundance") # Pick relabunance assay separately
+d0 <- as.matrix(vegdist(t(x), "bray"))
+
+# PCoA Ordination = MDS 
+#Confusingly, PCoA is also abbreviated PCO, and is also known as 
+#metric MultiDimensional Scaling (MDS)
+pcoa <- as.data.frame(cmdscale(d0, k = 2))
+names(pcoa) <- c("PCoA1", "PCoA2")
+
+# Quantify dissimilarities in the ordination space
+dp <- as.matrix(dist(pcoa))
+
+# Calculate stress i.e. relative difference in the original and
+# projected dissimilarities
+stress <- sum((dp - d0)^2) / sum(d0^2)
+
+#A Shepard plot visualizes the original versus the ordinated dissimilarity
+# between the observations. 
+ord <- order(as.vector(d0))
+df <- data.frame(d0 = as.vector(d0)[ord],
+                 dmds = as.vector(dp)[ord])
+
+ggplot(df, aes(x = d0, y = dmds)) +
+  geom_smooth() +
+  geom_point() +    
+  labs(title = "Shepard plot",
+       x = "Original distance",
+       y = "MDS distance",   
+       subtitle = paste("Stress:", round(stress, 2))) +
+  theme_bw()
+
+# Perform RDA
+tse <- runRDA(tse,
+              assay.type = "relabundance",
+              formula = assay ~ Year_Sample,
+              distance = "bray",
+              na.action = na.exclude)
+
+#For multiple values use this format: 
+#               formula = assay ~ ClinicalStatus + Gender + Age,
+
+# Store results of PERMANOVA test
+rda_info <- attr(reducedDim(tse, "RDA"), "significance")
+
+#Print out rda_info
+rda_info$permanova |>
+  knitr::kable()
+
+#To ensure that the homogeneity assumption holds, we retrieve the corresponding 
+#information from the results of RDA. In this case, none of the p-values is lower 
+#than the significance threshold, and thus homogeneity is observed.
+rda_info$homogeneity |>
+  knitr::kable()
+
+#visualize the weight and significance of each variable on the similarity
+#between samples with an RDA plot
+# Load packages for plotting function
+library(miaViz)
+
+# Generate RDA plot coloured by clinical status
+plotRDA(tse, "RDA", colour_by = "Year_Sample")
+#plotRDA(tse, "RDA")
+#From the plot above, we can see that only age significantly describes differences 
+#between the microbial profiles of different samples 
+#Statistically significant (P < 0.05)
+
+
+
+
+#Here
+
+
+
+
+
+#Example with metabolites 
+library(mia)
+data(HintikkaXOData, package="mia")
+mae <- HintikkaXOData 
+
+#Example with Clustering of data 
+library(mia)
+data("enterotype", package = "mia")
+tse_cluster <- enterotype
+
+
+#colData is for process data
+
+#Multiexperiments is for metatranscriptomics 
+
+#assay(tse, "counts")[1:5,1:7]
+#tse <- relAbundanceCounts(tse)
+#assays(tse)
+#assay(tse, "relabundance")
+#colData(tse)
+#rowData(tse)
+
+'''
+transformAssay(
+  method = c("alr", "chi.square", "clr", "frequency", "hellinger", "log", "log10",
+             "log2", "max", "normalize", "pa", "range", "rank", "rclr", "relabundance", "rrank",
+             "standardize", "total", "z"))
+
+#assay(tse, "counts")[1:5,1:7]
+#tse <- relAbundanceCounts(tse)
+#assays(tse)
+#assay(tse, "relabundance")
+#colData(tse)
+#rowData(tse)
+'''
+#top_features <- getTopFeatures(tse, method="median", top=10)
+#rowData(tse)[top_features, taxonomyRanks(tse)]
+
+
+'''
+
+
+
+```{r Agglomerate data using the Alternative experiment transformation in the Summarized experiment data container}
+
+# Agglomerate the data to Phylym level
+tse_phylum <- agglomerateByRank(tse, "Phylum")
+# both have the same number of columns (samples)
+dim(tse)
+#Decreasing the dimensionality of the assay matrix due to agglomerating by phylum rank
+dim(tse_phylum)
+
+#Question, why are not they equal in dimensionality between both? 107 vs. 103 (grouping is the reason)
+length(unique(row_data_tax$phylum))
+
+#assay(se_phylum)
+
+# Add the newtable as an alternative experiment
+altExp(tse, "phylum") <- tse_phylum
+altExpNames(tse)
+
+# Pick a sample subset: this acts on both altExp and assay data
+tse[,1:10]
+dim(altExp(tse[,1:10],"phylum"))
+```
+
+
+
+
+```{r transcriptomic data }
+
+dim(row_data_genes)
+colnames(row_data_genes)
+
+#Multiple experiments relate to complementary measurement types, such as transcriptomic or metabolomic profiling of #the microbiome or the host. 
+#if the samples can be matched directly 1:1, then transcriptomic data can be stores as Separate altExp
+# Here, must learn how to use another formating becuase this is not the case use MultiAssay anot altExp 
+#Go back and read more about MultiAssay 
+
+#To construct a MultiAssayExperiment object, just combine multiple TreeSE data containers. Here we import metabolite #data from the same study.
+
+```
+
+```{r transcript}
+
+assays = SimpleList(counts = assay_data)
+colData = DataFrame(samdat)
+rowData = DataFrame(row_data_genes)
+
+tse_transcript<- TreeSummarizedExperiment(assays = assays,
+                                          colData = colData,
+                                          rowData = rowData
+)
+
+tse_transcript
+
+```
+
+
+```{r mae - MultiAssayExperiment}
+# Create an ExperimentList that includes experiments
+experiments <- ExperimentList(microbiome = tse, 
+                              transcript = tse_transcript)
+
+# Create a MAE
+mae <- MultiAssayExperiment(experiments = experiments)
+
+mae
+
+```
+
+
+```{r melt SE into long dataframe}
+
+#the SE data can be converted to long data.frame format with meltAssay
+tse <- transformSamples(tse, method="relabundance")
+
+molten_tse <- meltAssay(tse,
+                             add_row_data = TRUE,
+                             add_col_data = TRUE,
+                             abund_values  = "relabundance")
+molten_tse
+
+
+
+#help("meltAssay")
+
+
+```
+
+```{r subsetting se by column }
+
+#Subsetting data helps to draw the focus of analysis on particular sets of samples and / or features. When dealing with large data sets, the subset of interest can be extracted and investigated separately. This might improve performance and reduce the computational load.
+
+dim(tse)
+
+# Note: when subsetting by sample, expect the number of columns to decrease; when subsetting by feature, expect the number of rows to decrease.
+
+head(colData)
+
+# inspect possible values for domain of life of the micro-organism 
+unique(tse$Year_Sample)
+
+# show recurrence for each value
+tse$Year_Sample %>% table()
+
+# subset by by year 2015 and 2016 (28 smaples)
+tse_subset_by_year <- tse[ , tse$Year_Sample %in% c("2015", "2016")]
+
+# show dimensions
+dim(tse_subset_by_year)
+
+```
+
+``` {r  Subset by feature (row-wise)}
+
+# inspect possible values for phylum
+unique(rowData(tse)$phylum)
+
+# show recurrence for each value
+rowData(tse)$phylum %>% table()
+
+#Non-agglomerated data
+
+# subset by feature
+tse_subset_by_feature <- tse[rowData(tse)$phylum %in% c("Actinobacteria","Proteobacteria") & !is.na(rowData(tse)$phylum), ]
+
+# show dimensions
+dim(tse_subset_by_feature)
+
+#Agglomerated data 
+
+# agglomerate by Phylum
+tse_phylum <- tse %>% agglomerateByRank(rank = "Phylum")
+
+# subset by feature and get rid of NAs
+tse_phylum_subset_by_feature <- tse_phylum[rowData(tse_phylum)$phylum %in% c("Actinobacteria","Proteobacteria") & !is.na(rowData(tse_phylum)$phylum), ]
+
+# show dimensions
+dim(tse_phylum_subset_by_feature)
+
+
+#Alternatively, the code below returns the not agglomerated version of the data.
+# store features of interest into phyla
+phyla <- c("Phylum:Actinobacteria", "Phylum:Proteobacteria")
+phyla1 <- c("Actinobacteria", "Proteobacteria")
+# subset by feature
+tse_phylum_subset_by_feature <- tse_phylum[rowData(tse_phylum)$phylum %in% phyla1 & !is.na(rowData(tse_phylum)$phylum), ]
+# show dimensions
+dim(tse_subset_by_feature)
+```
+
+``` {r Subset by sample and feature}
+
+# subset by year and feature and get rid of NAs
+tse_subset_by_sample_feature <- tse[rowData(tse)$phylum %in% c("Actinobacteria","Proteobacteria") & !is.na(rowData(tse)$phylum), tse$Year_Sample %in% c("2015", "2016")]
+
+# show dimensions
+dim(tse_subset_by_sample_feature)
+
+
+#Resulting dimensionality is correct 
+```
+``` { r splitting the data } 
+
+altExps(tse) <- splitByRanks(tse)
+altExps(tse)
+
+
+
+```
+
+
+
+```{r miaTime install} 
+
+
+
+#install.packages("devtools", dependencies = TRUE)
+#library(devtools)
+#devtools::install_github("microbiome/miaTime")
+#library(miaTime)
+
+```
+
+```{r A Jitter plot based on relative abundance data} 
+
+
+
+# Add relative abundances
+tse <- transformSamples(tse, method = "relabundance")
+
+plotAbundance(tse[rowData(tse)$Phylum %in% Phylum],
+              rank = "Phylum",
+              abund_values = "relabundance")
+
+```
+
+
+```{r prevalence }
+
+head(getPrevalence(tse, detection = 1/100, sort = TRUE, as_relative = TRUE))
+
+head(getPrevalence(tse, detection = 1, sort = FALSE, assay_name = "counts",
+                   as_relative = FALSE))
+
+# Agglomerate taxa abundances to Phylum level, and add the new table to the altExp slot
+altExp(tse,"Phylum") <- agglomerateByRank(tse, "Phylum")
+# Check prevalence for the Phylum abundance table from the altExp slot
+getPrevalence(altExp(tse,"Phylum"), detection = 1/100, sort = TRUE,
+              assay_name = "counts", as_relative = TRUE)
+#This is better
+getPrevalence(tse, rank = "Phylum", detection = 1/100, sort = TRUE,
+              assay_name = "counts", as_relative = TRUE)
+
+prev <- getPrevalentTaxa(tse, detection = 0, prevalence = 50/100,
+                         rank = "Phylum", sort = TRUE)
+prev
+
+
+getRareTaxa(tse)
+```
+
+```{r installing  scuttle}
+#BiocManager::install("scuttle")
+```
+
+```{r plotting prevalence }
+
+rowData(altExp(tse,"Phylum"))$prevalence <- 
+  getPrevalence(altExp(tse,"Phylum"), detection = 1/100, sort = FALSE,
+                assay_name = "counts", as_relative = TRUE)
+
+library(scater)
+plotRowData(altExp(tse,"Phylum"), "prevalence", colour_by = "Phylum")
+```
+
+```{r install ggsignif}
+devtools::install_github("const-ae/ggsignif")
+```
+
+```{r diversity/richness/evenness/dominance}
+#Richness
+se <- mia::estimateRichness(se, 
+                            abund_values = "counts", 
+                            index = "observed", 
+                            name="observed")
+
+colData(se)$observed
+
+
+#Diversity 
+se <- mia::estimateDiversity(se, 
+                             abund_values = "counts",
+                             index = "shannon", 
+                             name = "shannon")
+head(colData(se)$shannon)
+
+
+
+#if( !require(ggsignif) ){
+#  install.packages(ggsignif)
+#}
+#library(ggplot2)
+#library(ggsignif)
+
+# Subsets the data. Takes only those samples that are from feces, skin, or tongue,
+# and creates data frame from the collected data
+df <- as.data.frame(colData(se)[colData(se)$Year_Sample %in% 
+                                  c("2014", "2015", "2016"), ])
+
+#Take all samples 
+df1 <- as.data.frame(colData(se))
+# Changes old levels with new levels
+df$Year_Sample <- factor(df$Year_Sample)
+
+
+# For significance testing, all different combinations are determined
+comb <- split(t(combn(levels(df$Year_Sample), 2)), 
+              seq(nrow(t(combn(levels(df$Year_Sample), 2)))))
+
+
+ggplot(df, aes(x = Year_Sample, y = shannon)) +
+  # Outliers are removed, because otherwise each data point would be plotted twice; 
+  # as an outlier of boxplot and as a point of dotplot.
+  geom_boxplot(outlier.shape = NA) + 
+  geom_jitter(width = 0.2) + 
+  geom_signif(comparisons = comb, map_signif_level = FALSE) +
+  theme(text = element_text(size = 10))
+ggsave("figures/Diversity1.png")
+
+
+```
+
+```{r estimate diversity }
+#Use this for pre-processing 
+
+#The available indices include the ‘Coverage’, ‘Faith's phylogenetic diversity’, ‘Fisher alpha’, ‘Gini-Simpson’, ‘Inverse Simpson’, ‘log-modulo skewness’, and ‘Shannon’ diversity indices
+
+
+#Richness
+tse <- mia::estimateRichness(tse, 
+                             assay_name = "counts", 
+                             index = "observed", 
+                             name="observed")
+
+sample_description = as.data.frame(colData(tse)$observed)
+setnames(sample_description, old = colnames(sample_description), new = "observed")
+
+#Diversity 
+tse <- mia::estimateDiversity(tse, 
+                              assay_name = "counts",
+                              index =  "shannon", 
+                              name = "shannon")
+
+sample_description$shannon <- paste(colData(tse)$shannon)
+
+
+#Dominance 
+tse <- estimateDominance(tse, 
+                         assay_name = "counts", 
+                         index="relative")
+
+sample_description$relative <- paste(colData(tse)$relative)
+
+
+#Rarity 
+tse <- mia::estimateDiversity(tse, 
+                              assay_name = "counts",
+                              index ="log_modulo_skewness")
+
+sample_description$log_modulo_skewness <- paste(colData(tse)$log_modulo_skewness)
+
+#Evenness  
+tse <- estimateEvenness(tse, 
+                        abund_values = "counts", 
+                        index="simpson")
+
+sample_description$simpson <- paste(colData(tse)$simpson)
+
+#Divergence
+tse <- mia::estimateDivergence(tse,
+                               assay_name = "counts",
+                               reference = "median",
+                               FUN = vegan::vegdist)
+
+sample_description$divergence <-paste(colData(tse)$divergence)
+
+#Fischer's alpha diversity 
+
+tse <- mia::estimateDiversity(tse, 
+                              assay_name = "counts",
+                              index = "fisher")
+
+sample_description$fisher <- paste(colData(tse)$fisher)
+
+
+#Gini-Simpson diversity
+tse <- mia::estimateDiversity(tse, 
+                              assay_name = "counts",
+                              index = "gini_simpson")
+
+sample_description$gini_simpson <- paste(colData(tse)$gini_simpson)
+
+
+#Inverse Simpson diversity
+tse <- mia::estimateDiversity(tse, 
+                              assay_name = "counts",
+                              index = "inverse_simpson")
+
+sample_description$inverse_simpson <- paste(colData(tse)$inverse_simpson)
+
+install.packages("writexl")
+library("writexl")
+write_xlsx(sample_description,"C:/Users/MWP-WKS050217/Desktop/RUG_Asala/PhD/Code/microbiome_practice/output_data/Diversity_Measures.xlsx")
+
+colnames(sample_description)
+view(sample_description)
+#write.csv(sample_description,"output_data\\AlphaDiversity.csv", row.names = FALSE)
+#Sorting dataframe by diversity values 
+sample_description[
+  with(sample_description, order("shannon", "fisher","gini_simpson", "inverse_simpson")),
+]
+
+sample_description %>% 
+  as_tibble %>% 
+  mutate_if(is.character, as.numeric) %>% 
+  
+  ggpairs()
+
+cormat = data.frame()
+cormat <- round(cor(sample_description),2)
+head(cormat)
+
+```
+
+
+
+``` {r plot relative abundance } 
+
+
+tse <- transformCounts(tse, method = "relabundance")
+plotAbundance(tse, rank = "phylum", abund_values = "relabundance")
+
+prev_phylum <- getPrevalentTaxa(tse, rank = "phylum",
+                                detection = 0.01)
+getPrevalentTaxa
+library(patchwork)
+plots <- plotAbundance(tse[rowData(tse)$Phylum %in% prev_phylum],
+                       features = "Year_Sample",
+                       rank = "Phylum",
+                       abund_values = "relabundance")
+plots$abundance / plots$Year_Sample +
+  plot_layout(heights = c(9, 1))
+
+??plotAbundance
+ggsave("figures/RelAbundance_PrevPhylum.png")
+
+plots <- plotAbundance(tse[rowData(tse)$Phylum %in% prev_phylum],
+                       features = "Year_Sample",
+                       rank = "Phylum",
+                       abund_values = "relabundance")
+plots$abundance / plots$Year_Sample +
+  plot_layout(heights = c(9, 1))
+
+```
+```{r plot prevalence taxa }
+plotTaxaPrevalence(tse, rank = "Phylum",
+                   detections = c=(0. 0.001, 0.1, 0.2)
+                   
+                   ggsave("figures/Prev_phylum.png")
+                   ```
+                   ```{r relative abundance vs prevalence}
+                   
+                   plotPrevalentAbundance(tse, rank = "Family",
+                                          colour_by = "Phylum")+ 
+                     scale_x_log10()
+                   
+                   ggsave("figures/RelAbundance_Prev.png")
+                   ```
+                   
+                   ```{r }
+                   library(scater)
+                   
+                   plots <- lapply(c("shannon", "faith"),
+                                   plotColData,
+                                   object = tse, colour_by = "Sample_Date")
+                   plots[[1]] + plots[[2]] +
+                     plot_layout(guides = "collect")
+                   
+                   ```
+                   
+                   
