@@ -146,7 +146,10 @@ if( !require("reshape2") ){
   library("reshape2")
 }
 
-
+if( !require("DescTools") ){
+  install.packages("DescTools")
+  library("DescTools")
+}
 
 
 

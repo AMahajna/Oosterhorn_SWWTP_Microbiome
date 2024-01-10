@@ -17,8 +17,6 @@ source(file = "scripts/install_load_packages.r")
 #Microbiome Data for assay and rowData in TSE 
 table_raw <- read_csv(file = "input_data/4717_groupby_filtered_all_summary_pathways_taxonomy_abs.csv", show_col_types = FALSE)
 
-#Read in sample data 
-
 #Relevant process data 
 process_data <- read_csv(file = "input_data/relevant_process_data.csv", show_col_types = FALSE)
 #The measure rarity is not used here 
@@ -26,24 +24,27 @@ process_data <- process_data[-13]
 #Check the class of each column to be numeric 
 #sapply(process_data,class)
 
-
-################################################################################
-##EDA for taxonomy 
-sapply(table_raw[7:38],class)
-
-
+#Sample data overview
+samdat = read_excel("input_data/WWTP_overview_samples_20180125.xlsx") %>%
+  filter(NGS_performed == "YES") %>% 
+  dplyr::select(sampleid = MonsterCodeBC, everything()) 
 
 ################################################################################
 ##Tidying and subsetting data
 
+################################################################################
+#Assay: these are the reads/counts for the microbiome
 #Merge uniprot name and code to have unique names 
 table_raw$uniprot_species_name = paste(table_raw$species_strain,table_raw$uniprot_name,table_raw$uniprot_acc, sep="_")
 
-#assay data is the experimental result 
+#change the sample name in column names in the assay data to match that 
+#in the sample data overview
 assay_data <-
   table_raw %>%  
-  dplyr::select(uniprot_species_name, starts_with("47")) %>% 
+  dplyr::select(uniprot_species_name, starts_with("47"))%>% 
   rename_with(~str_sub(., end = 8))
+
+colnames(assay_data)[1] <- "uniprot_species_name"
 
 #Cleaning "<DL" values= replace less than detection level with zero
 assay_data =  data.frame(lapply(assay_data, function(x) {
@@ -67,80 +68,123 @@ assay_data <-
   rename_with(~gsub("X","",.x)) %>% 
   as.data.frame()
 
-#rownames is for row data that contains gene data 
-rownames(assay_data) = assay_data$uniprot_
-
-#Here we take only numeric data and convert to matrix for assay data 
+#make row name the unique entity is for row data that contains gene data 
+rownames(assay_data) = assay_data$uniprot_species_name
+assay_df = assay_data
+#Here we take only numeric data and convert to matrix for assay data
+#The unique entity data is row names in the matrix 
 assay_data = assay_data[,-1] %>% as.matrix()
 
-#Here, we extract relevant genome data 
+################################################################################
+#taxonomic data _ goes in row data in TSE 
 row_data_tax <-
   table_raw %>% 
   dplyr::select(uniprot_species_name,taxid:domain)
 
-#column data is corresponding to the sample information
-samdat = read_excel("input_data/WWTP_overview_samples_20180125.xlsx") %>%
-  filter(NGS_performed == "YES") %>% 
-  dplyr::select(sampleid = MonsterCodeBC, everything()) 
+#change the taxonomic ranking name to match mia package 
+names(row_data_tax)[names(row_data_tax) == 'sub_domain'] <- "kingdom"
+names(row_data_tax)[names(row_data_tax) == 'species'] <- "species_missing"
+names(row_data_tax)[names(row_data_tax) == 'species_strain'] <- "species"
+#check
+#colnames(row_data_tax)
+#reorder taxonomic ordering 
+row_data_tax_reorder = select(row_data_tax,uniprot_species_name, domain, kingdom, phylum, class, order, family, genus,species, everything())
+#capitalize taxonomy name 
+colnames(row_data_tax_reorder) <- c('uniprot_species_name', 'Domain', 'Kingdom', 'Phylum', 'Class', 'Order', 'Family', 'Genus','Species',"taxid","species_missing")
 
-''' need to recheck this
-# I think it is better to take input data instead 
-process_data = read_csv("output_data/KeyFeatures.csv") %>% 
-  select(-Season)
-
-samdat <- merge(samdat, process_data, by = "Sample_Date", all.x = TRUE)
-'''
-#Not relevant at the moment 
-#  mutate(Sample_Date=lubridate::as_date(Sample_Date))
-#mutate(Sample_Date=lubridate::as_date(Sample_Date,format="%d-%m-%Y"))
-
-#additional data 
-sample_data <-
-  table_raw %>%  
-  dplyr::select(starts_with("47")) %>%
-  colnames() %>% 
-  data.frame(check.names = T)
-colnames(sample_data) = "sampleid"
-samdf = data.frame(sample_data)
-
-#reorganizing for next step
-table_raw <- table_raw %>%
-  dplyr::select(uniprot_species_name, everything())
-
-#splitting additional data 
-col_data <- 
-  table_raw %>% 
-  dplyr::select(uniprot_species_name:info) %>% 
-  dplyr::select(uniprot_species_name,everything())
-
-#Functional data of enzymes  
+################################################################################
+#Functional data of enzymes _ goes in row data in TSE 
 row_data_genes <-
   table_raw %>% 
   dplyr::select(uniprot_species_name,kegg_reaction_number:go_number) %>% 
   mutate_all(funs(str_replace(., "_","NA"))) %>% 
-  mutate_all(funs(str_replace(., "-$","NA")))  
+  mutate_all(funs(str_replace(., "-$","NA"))) 
 
-# reorder taxonomy 
-#Error: Taxonomic ranks are not in order. Please reorder columns, which #correspond to taxonomic ranks like this:
-#'domain', 'kingdom', 'phylum', 'class', 'order', 'family', 'genus', 'species'.
-#rename sub_domain to kingdom
+################################################################################
+#Multi-Assay Experiment go in column data as well 
+# 1.  "kegg_type_pathway"  
+# 2.  "kegg_pathway" 
 
-names(row_data_tax)[names(row_data_tax) == 'sub_domain'] <- "kingdom"
-names(row_data_tax)[names(row_data_tax) == 'species'] <- "species_missing"
-names(row_data_tax)[names(row_data_tax) == 'species_strain'] <- "species"
-colnames(row_data_tax)
+pathway_type = row_data_genes %>% 
+  dplyr::select(kegg_type_pathway)
+pathway_type = cbind(pathway_type,assay_df[ ,-1])
 
-row_data_tax_reorder = select(row_data_tax,uniprot_species_name, domain, kingdom, phylum, class, order, family, genus,species, everything())
-#library(stats)
-colnames(row_data_tax_reorder) <- c('uniprot_species_name', 'Domain', 'Kingdom', 'Phylum', 'Class', 'Order', 'Family', 'Genus','Species',"taxid","species_missing")
 
+#pathway_type <- pathway_type %>%
+#  group_by(kegg_type_pathway) %>%
+#  summarise(across(where(is.numeric), sum))
+
+#pathway_type_df <- t(pathway_type[, -1])  
+#colnames(pathway_type_df) <- pathway_type$kegg_type_pathway
+
+#Check the grouping is correct 
+#sum(colSums(pathway_type[ ,-1]) == colSums(assay_df[ , -1])) should equal 32 n samples
+
+pathway = row_data_genes %>% 
+  dplyr::select(kegg_pathway)
+pathway = cbind(pathway,assay_df[ ,-1])
+
+#pathway <- pathway %>%
+#  group_by(kegg_pathway) %>%
+#  summarise(across(where(is.numeric), sum))
+
+#pathway_df <- t(pathway[, -1])  
+#colnames(pathway_df) <- pathway$kegg_pathway
+
+#Check the grouping is correct 
+#sum(colSums(pathway_type[ ,-1]) == colSums(assay_df[ , -1])) should equal 32 n samples
+################################################################################
+#sample data _ goes in column data in TSE including the  
+samdat = data.frame(cbind(samdat,process_data))
+#check dim of samdat it should be: 32*33
+#dim(samdat)
+################################################################################
+##plot missing data for both gene and taxa
+
+missing_tax_plot = row_data_tax %>% 
+  dplyr::select('domain', 'kingdom', 'phylum', 'class', 'order', 'family', 'genus','species_missing','species')%>% 
+  rename("spcies_strain"="species","species"="species_missing")
+
+png(filename="figures/missing_taxonomy.png" ,units = 'in',width=9, height=6, res=1000)
+plot_missing(missing_tax_plot, title = "missing data profile for taxonomy")
+dev.off()
+
+missing_genes_plot <- row_data_genes %>%
+  select(-uniprot_species_name)%>%
+  mutate_all(~ifelse(. == "NA", NA, 1))
+
+png(filename="figures/missing_functions.png" ,units = 'in',width=9, height=6, res=1000)
+plot_missing(missing_genes_plot, title = "missing data profile for functional data")
+dev.off()
+
+################################################################################
 #Create TSE 
 #Add to colData the process parameters
 assays = SimpleList(counts = assay_data)
 colData = data.frame(samdat)
 colData$Year_Sample<-as.character(colData$Year_Sample)
 rowData = data.frame(row_data_tax_reorder)
-#altExp(tse, "Function") <- 
+
+tse<- TreeSummarizedExperiment(assays = assays,
+                               colData = colData,
+                               rowData = rowData
+)
+
+#Create 3 different TSE: one for each for each 
+tse_pathway_type <- TreeSummarizedExperiment(assays = assays,
+                                             colData = colData,
+                                             rowData = pathway_type[ ,1]
+)
+
+altExp(tse, "pathway_type") <- pathway_type
+
+
+
+
+tse <- transformAssay(tse, method = "relabundance")
+
+
+#add functional gene data to the TSE
 # modify the Description entries
 #colData(tse)$Description <- paste(colData(tse)$Description, "modified description")
 # view modified variable
@@ -152,13 +196,7 @@ rowData = data.frame(row_data_tax_reorder)
 # view new variable
 #head(tse$NewVariable)
 
-tse<- TreeSummarizedExperiment(assays = assays,
-                               colData = colData,
-                               rowData = rowData
-)
 
-
-tse <- transformAssay(tse, method = "relabundance")
 
 
 #Abundance
@@ -1238,5 +1276,6 @@ plotTaxaPrevalence(tse, rank = "Phylum",
                      plot_layout(guides = "collect")
                    
                    ```
+                   
                    
                    
