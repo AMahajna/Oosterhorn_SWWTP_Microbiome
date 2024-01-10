@@ -19,8 +19,7 @@ table_raw <- read_csv(file = "input_data/4717_groupby_filtered_all_summary_pathw
 
 #Relevant process data 
 process_data <- read_csv(file = "input_data/relevant_process_data.csv", show_col_types = FALSE)
-#The measure rarity is not used here 
-process_data <- process_data[-13]
+
 #Check the class of each column to be numeric 
 #sapply(process_data,class)
 
@@ -101,6 +100,14 @@ row_data_genes <-
   mutate_all(funs(str_replace(., "-$","NA"))) 
 
 ################################################################################
+#sample data _ goes in column data in TSE including the  
+
+process_data <- subset(process_data, select = -rarity)
+samdat = data.frame(cbind(samdat,process_data))
+#check dim of samdat it should be: 32*33
+#dim(samdat)
+
+################################################################################
 ##plot missing data for both gene and taxa
 
 missing_tax_plot = row_data_tax %>% 
@@ -166,11 +173,7 @@ rownames(pathway_assay) = pathway$kegg_pathway
 #taxonomyRanks(tse)
 
 ################################################################################
-#sample data _ goes in column data in TSE including the  
-samdat = data.frame(cbind(samdat,process_data))
-#check dim of samdat it should be: 32*33
-#dim(samdat)
-################################################################################
+
 
 #Create TSE 
 #Add to colData the process parameters
@@ -448,15 +451,49 @@ dev.off()
 
 ################################################################################
 ################################################################################
-#Taxonomic information 
+#Community Similarity
+
+# Perform RDA
+tse_species <- runRDA(tse_species,
+              assay.type = "relabundance",
+              formula = assay ~ INF_Cl_mg_per_l + INF_COD_mg_O2_per_l + INF_Nkj_mg_N_per_l +  INF_SO4_µg_per_l,
+              distance = "bray",
+              na.action = na.exclude)
+
+#For multiple values use this format: 
+#               formula = assay ~ ClinicalStatus + Gender + Age,
+
+# Store results of PERMANOVA test
+rda_info <- attr(reducedDim(tse_species, "RDA"), "significance")
+
+#Print out rda_info
+rda_info$permanova |>
+  knitr::kable()
+
+#To ensure that the homogeneity assumption holds, we retrieve the corresponding 
+#information from the results of RDA. In this case, none of the p-values is lower 
+#than the significance threshold, and thus homogeneity is observed.
+rda_info$homogeneity |>
+  knitr::kable()
+
+#visualize the weight and significance of each variable on the similarity
+#between samples with an RDA plot
+# Load packages for plotting function
+
+
+# Generate RDA plot coloured by clinical status
+plotRDA(tse_species, "RDA", colour_by = "Year_Sample")
+#plotRDA(tse, "RDA")
+#From the plot above, we can see that only age significantly describes differences 
+#between the microbial profiles of different samples 
+#Statistically significant (P < 0.05)
 
 
 
 
 
 
-
-
+################################################################################
 
 
 #add functional gene tse_species#add functional gene data to the TSE
@@ -902,41 +939,6 @@ ggplot(df, aes(x = d0, y = dmds)) +
        y = "MDS distance",   
        subtitle = paste("Stress:", round(stress, 2))) +
   theme_bw()
-
-# Perform RDA
-tse <- runRDA(tse,
-              assay.type = "relabundance",
-              formula = assay ~ Year_Sample,
-              distance = "bray",
-              na.action = na.exclude)
-
-#For multiple values use this format: 
-#               formula = assay ~ ClinicalStatus + Gender + Age,
-
-# Store results of PERMANOVA test
-rda_info <- attr(reducedDim(tse, "RDA"), "significance")
-
-#Print out rda_info
-rda_info$permanova |>
-  knitr::kable()
-
-#To ensure that the homogeneity assumption holds, we retrieve the corresponding 
-#information from the results of RDA. In this case, none of the p-values is lower 
-#than the significance threshold, and thus homogeneity is observed.
-rda_info$homogeneity |>
-  knitr::kable()
-
-#visualize the weight and significance of each variable on the similarity
-#between samples with an RDA plot
-# Load packages for plotting function
-library(miaViz)
-
-# Generate RDA plot coloured by clinical status
-plotRDA(tse, "RDA", colour_by = "Year_Sample")
-#plotRDA(tse, "RDA")
-#From the plot above, we can see that only age significantly describes differences 
-#between the microbial profiles of different samples 
-#Statistically significant (P < 0.05)
 
 
 
