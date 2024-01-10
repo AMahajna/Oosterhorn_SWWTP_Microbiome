@@ -101,7 +101,7 @@ row_data_genes <-
   mutate_all(funs(str_replace(., "-$","NA"))) 
 
 ################################################################################
-#Multi-Assay Experiment go in column data as well 
+#Multi-Assay Experiment 
 # 1.  "kegg_type_pathway"  
 # 2.  "kegg_pathway" 
 
@@ -109,10 +109,12 @@ pathway_type = row_data_genes %>%
   dplyr::select(kegg_type_pathway)
 pathway_type = cbind(pathway_type,assay_df[ ,-1])
 
+pathway_type <- pathway_type %>%
+  group_by(kegg_type_pathway) %>%
+  summarise(across(where(is.numeric), sum))
 
-#pathway_type <- pathway_type %>%
-#  group_by(kegg_type_pathway) %>%
-#  summarise(across(where(is.numeric), sum))
+pathway_type_assay = as.data.frame(pathway_type[ ,2:33])
+rownames(pathway_type_assay) = pathway_type$kegg_type_pathway
 
 #pathway_type_df <- t(pathway_type[, -1])  
 #colnames(pathway_type_df) <- pathway_type$kegg_type_pathway
@@ -124,9 +126,12 @@ pathway = row_data_genes %>%
   dplyr::select(kegg_pathway)
 pathway = cbind(pathway,assay_df[ ,-1])
 
-#pathway <- pathway %>%
-#  group_by(kegg_pathway) %>%
-#  summarise(across(where(is.numeric), sum))
+pathway <- pathway %>%
+  group_by(kegg_pathway) %>%
+  summarise(across(where(is.numeric), sum))
+
+pathway_assay = as.data.frame(pathway[ ,2:33])
+rownames(pathway_assay) = pathway$kegg_pathway
 
 #pathway_df <- t(pathway[, -1])  
 #colnames(pathway_df) <- pathway$kegg_pathway
@@ -170,15 +175,35 @@ tse<- TreeSummarizedExperiment(assays = assays,
                                rowData = rowData
 )
 
-#Create 3 different TSE: one for each for each 
-tse_pathway_type <- TreeSummarizedExperiment(assays = assays,
-                                             colData = colData,
-                                             rowData = pathway_type[ ,1]
-)
+################################################################################
+pathway_type_assay = (counts = pathway_type_assay)
+colData = data.frame(samdat)
+colData$Year_Sample<-as.character(colData$Year_Sample)
 
-altExp(tse, "pathway_type") <- pathway_type
+tse_pathway_type <- TreeSummarizedExperiment(assays = SimpleList(counts = as.matrix(pathway_type_assay)) ,
+                                        colData = colData,
+                                        rowData = DataFrame(pathway_type[ ,1]))
 
+################################################################################
+pathway_assay = (counts = pathway_assay)
+colData = data.frame(samdat)
+colData$Year_Sample<-as.character(colData$Year_Sample)
 
+tse_pathway <- TreeSummarizedExperiment(assays = SimpleList(counts = as.matrix(pathway_assay)) ,
+                                        colData = colData,
+                                        rowData = pathway[ ,1])
+################################################################################
+#1. Can group by pathway and create a different TSE and analyze as MAE
+# Sum all samples, and then group by Phylum and pathway_type 
+#The do cross-correlation of other plots
+# Create an ExperimentList that includes experiments
+experiments <- ExperimentList(microbiome = tse, 
+                              pathways = tse_pathway,
+                              type = tse_pathway_type)
+
+# Create a MAE
+mae <- MultiAssayExperiment(experiments = experiments)
+################################################################################
 
 
 tse <- transformAssay(tse, method = "relabundance")
