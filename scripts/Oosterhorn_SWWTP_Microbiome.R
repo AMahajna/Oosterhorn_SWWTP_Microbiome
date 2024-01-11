@@ -1,3 +1,6 @@
+#To do: 
+# 1. bicluster according to 10.4.1 
+# cluster is pathway class and heatmap is sample id. 
 ################################################################################
 ##Create folder for project organization
 
@@ -17,16 +20,19 @@ source(file = "scripts/install_load_packages.r")
 #Microbiome Data for assay and rowData in TSE 
 table_raw <- read_csv(file = "input_data/4717_groupby_filtered_all_summary_pathways_taxonomy_abs.csv", show_col_types = FALSE)
 
-#Relevant process data 
+#Relevant process data to be added to column data in TSE
 process_data <- read_csv(file = "input_data/relevant_process_data.csv", show_col_types = FALSE)
 
 #Check the class of each column to be numeric 
 #sapply(process_data,class)
 
-#Sample data overview
+#Sample data overview added to column data in TSE
 samdat = read_excel("input_data/WWTP_overview_samples_20180125.xlsx") %>%
   filter(NGS_performed == "YES") %>% 
   dplyr::select(sampleid = MonsterCodeBC, everything()) 
+
+#removal_efficiency respective to sample to be added to column data in TSE
+removal_efficiency  = read_excel("input_data/Removal_Efficiency.xlsx")
 
 ################################################################################
 ##Tidying and subsetting data
@@ -67,11 +73,13 @@ assay_data <-
   rename_with(~gsub("X","",.x)) %>% 
   as.data.frame()
 
+
+
 #make row name the unique entity is for row data that contains gene data 
 rownames(assay_data) = assay_data$uniprot_species_name
-assay_df = assay_data
 #Here we take only numeric data and convert to matrix for assay data
 #The unique entity data is row names in the matrix 
+assay_df = assay_data
 assay_data = assay_data[,-1] %>% as.matrix()
 
 ################################################################################
@@ -103,7 +111,23 @@ row_data_genes <-
 #sample data _ goes in column data in TSE including the  
 
 process_data <- subset(process_data, select = -rarity)
-samdat = data.frame(cbind(samdat,process_data))
+#Standardize environmental data - reflect on standardization method choice 
+process_data <- decostand(process_data, method ="log")
+
+samdat <- samdat  %>%
+  mutate(Season = case_when(
+    month(Sample_Date) %in% c(3, 4, 5) ~ "Spring",
+    month(Sample_Date) %in% c(6, 7, 8) ~ "Summer",
+    month(Sample_Date) %in% c(9, 10, 11) ~ "Fall",
+    month(Sample_Date) %in% c(12, 1, 2) ~ "Winter"
+  ))
+
+#for coloring in groups and clustering 
+samdat$Year_Sample<-as.character(samdat$Year_Sample)
+samdat$Sample_Date<-as.character(samdat$Sample_Date)
+
+samdat = data.frame(cbind(samdat,process_data,(removal_efficiency[ ,3:6])/100))
+
 #check dim of samdat it should be: 32*33
 #dim(samdat)
 
@@ -137,33 +161,128 @@ dev.off()
 
 #Note: KEGG metabolic pathways are relevant for the process 
 
-pathway_type = row_data_genes %>% 
-  dplyr::select(kegg_type_pathway)
-pathway_type = cbind(pathway_type,assay_df[ ,-1])
 
-pathway_type <- pathway_type %>%
-  group_by(kegg_type_pathway) %>%
-  summarise(across(where(is.numeric), sum))
+pathway_class = row_data_genes %>% 
+  dplyr::select(kegg_class_pathway,kegg_type_pathway, kegg_pathway)
+#check chould be TRUE FALSE 
+#dim(assay_df) == dim(pathway_class)
+pathway_class = cbind(pathway_class,assay_df)
+rownames(pathway_class) <- NULL
 
-pathway_type_assay = as.data.frame(pathway_type[ ,2:33])
-rownames(pathway_type_assay) = pathway_type$kegg_type_pathway
+#Extract Metabolism related pathway data 
+pathway_metabolism =  pathway_class[pathway_class$kegg_class_pathway == "A09100 Metabolism", ]
 
+#Group by metabolism pathway and metabolism pathway type and sum reads respectively  
+pathway_metabolism <- pathway_metabolism %>%
+  group_by(kegg_pathway,kegg_type_pathway, kegg_class_pathway) %>%
+  summarise(across(where(is.numeric), sum)) %>%
+  arrange(kegg_type_pathway)
+
+# We sum up all other metabolic pathways
+pathway_other = colSums(pathway_class[pathway_class$kegg_class_pathway != "A09100 Metabolism", -c(1, 2,3)])
+pathway_other$kegg_class_pathway ="Other pathway class"
+pathway_other$kegg_type_pathway = "Other pathway type"
+pathway_other$kegg_pathway ="Other pathway "
+pathway_other %>% 
+  dplyr::select(kegg_pathway,kegg_type_pathway, kegg_class_pathway,  everything())%>% 
+  data.frame()
+
+#We add it to total assay 
+pathway_metabolism_other = rbind(pathway_metabolism,pathway_other)
+
+#Check the sum of reads in the new dataframe 
+sum(colSums(pathway_metabolism_other[ ,-c(1,2,3)]) == colSums(assay_df)) 
+#should equal 32 n samples = if it's equal to 32 meaning grouping went right
+
+pathway_assay = as.data.frame(pathway_metabolism_other[ ,4:ncol(pathway_metabolism_other)]) 
+rownames(pathway_assay) = pathway_metabolism_other$kegg_pathway
+
+#Check 
+length(colnames(pathway_assay))
+#should be 32 
+nrow(pathway_assay) == nrow(pathway_metabolism_other$kegg_pathway)
+#Should be true 
+
+#set rownames to pathway name to convert into assay for TSE_pathway
+#rownames(pathway_assay) = pathway_metabolism_other$kegg_pathway
+row_data_pathway = pathway_metabolism_other[ ,1:2]
+#row_data_pathway = as.data.frame(row_data_pathway)
+#rownames(row_data_pathway) = row_data_pathway$kegg_pathway
+#row_data_pathway = row_data_pathway[ ,2]
 #pathway_type_df <- t(pathway_type[, -1])  
 #colnames(pathway_type_df) <- pathway_type$kegg_type_pathway
+
+################################################################################
+#Assay for pathway_type
+
+#Group by metabolism type
+pathway_metabolism_type <- pathway_metabolism %>%
+  group_by(kegg_type_pathway) %>%
+  summarise(across(where(is.numeric), sum)) %>%
+  arrange(kegg_type_pathway)
+
+#We add it to total assay 
+pathway_other = pathway_other %>%
+  as.data.frame()%>%
+  dplyr::select(-kegg_class_pathway,-kegg_pathway)%>%
+  select(kegg_type_pathway, everything())
+
+
+pathway_metabolism_type_other = rbind(pathway_metabolism_type,pathway_other)
+
+#Check the sum of reads in the new dataframe 
+sum(colSums(pathway_metabolism_other[ ,-c(1,2,3)]) == colSums(assay_df)) 
+#should equal 32 n samples = if it's equal to 32 meaning grouping went right
+
+pathway_type_assay = as.data.frame(pathway_metabolism_other[ ,4:ncol(pathway_metabolism_other)]) 
+rownames(pathway_type_assay) = pathway_metabolism_type_other$kegg_type_pathway
+
+#Check 
+length(colnames(pathway_assay))
+#should be 32 
+nrow(pathway_assay) == nrow(pathway_metabolism_other$kegg_pathway)
+#Should be true 
+
+#set rownames to pathway name to convert into assay for TSE_pathway
+#rownames(pathway_assay) = pathway_metabolism_other$kegg_pathway
+row_data_pathway = pathway_metabolism_other[ ,1:2]
+#row_data_pathway = as.data.frame(row_data_pathway)
+#rownames(row_data_pathway) = row_data_pathway$kegg_pathway
+#row_data_pathway = row_data_pathway[ ,2]
+#pathway_type_df <- t(pathway_type[, -1])  
+#colnames(pathway_type_df) <- pathway_type$kegg_type_pathway
+
+
+
+
+################################################################################
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 #Check the grouping is correct 
 #sum(colSums(pathway_type[ ,-1]) == colSums(assay_df[ , -1])) should equal 32 n samples
 
-pathway = row_data_genes %>% 
-  dplyr::select(kegg_pathway)
-pathway = cbind(pathway,assay_df[ ,-1])
+#pathway = row_data_genes %>% 
+#  dplyr::select(kegg_pathway)
+#pathway = cbind(pathway,assay_df[ ,-1])
 
-pathway <- pathway %>%
-  group_by(kegg_pathway) %>%
-  summarise(across(where(is.numeric), sum))
+#pathway <- pathway %>%
+#  group_by(kegg_pathway) %>%
+#  summarise(across(where(is.numeric), sum))
 
-pathway_assay = as.data.frame(pathway[ ,2:33])
-rownames(pathway_assay) = pathway$kegg_pathway
+#pathway_assay = as.data.frame(pathway[ ,2:33])
+#rownames(pathway_assay) = pathway$kegg_pathway
 
 #pathway_df <- t(pathway[, -1])  
 #colnames(pathway_df) <- pathway$kegg_pathway
@@ -173,26 +292,10 @@ rownames(pathway_assay) = pathway$kegg_pathway
 #taxonomyRanks(tse)
 
 ################################################################################
-
-
 #Create TSE 
-#Add to colData the process parameters
+
 assays = SimpleList(counts = assay_data)
-
 colData = data.frame(samdat)
-
-#add season based on date
-colData  <- colData  %>%
-  mutate(Season = case_when(
-    month(Sample_Date) %in% c(3, 4, 5) ~ "Spring",
-    month(Sample_Date) %in% c(6, 7, 8) ~ "Summer",
-    month(Sample_Date) %in% c(9, 10, 11) ~ "Fall",
-    month(Sample_Date) %in% c(12, 1, 2) ~ "Winter"
-  ))
-
-colData$Year_Sample<-as.character(colData$Year_Sample)
-colData$Sample_Date<-as.character(colData$Sample_Date)
-
 rowData = data.frame(row_data_tax_reorder)
 
 tse<- TreeSummarizedExperiment(assays = assays,
@@ -202,39 +305,32 @@ tse<- TreeSummarizedExperiment(assays = assays,
 
 #taxonomyRanks(tse)
 ################################################################################
-pathway_type_assay = (counts = pathway_type_assay)
-colData = data.frame(samdat)
-colData$Year_Sample<-as.character(colData$Year_Sample)
-
-tse_pathway_type <- TreeSummarizedExperiment(assays = SimpleList(counts = as.matrix(pathway_type_assay)) ,
-                                             colData = colData,
-                                             rowData = DataFrame(pathway_type[ ,1]))
-
-################################################################################
-#tax limited TSE 
+#tax limited TSE not including the enzymes 
 tse_species <- mergeFeaturesByRank(tse, "Species", na.rm=TRUE)
 
 ################################################################################
-#tax limited TSE 
+#Phylum level limited TSE 
 tse_phylum <- mergeFeaturesByRank(tse, "Phylum", na.rm=TRUE)
 
 ################################################################################
-pathway_type_assay = (counts = pathway_type_assay)
-colData = data.frame(samdat)
-colData$Year_Sample<-as.character(colData$Year_Sample)
-
-tse_pathway_type <- TreeSummarizedExperiment(assays = SimpleList(counts = as.matrix(pathway_type_assay)) ,
-                                        colData = colData,
-                                        rowData = DataFrame(pathway_type[ ,1]))
-
-################################################################################
-pathway_assay = (counts = pathway_assay)
-colData = data.frame(samdat)
-colData$Year_Sample<-as.character(colData$Year_Sample)
+#pathway TSE
+#pathway_assay = (counts = pathway_assay)
+#colData = data.frame(samdat)
+#colData$Year_Sample<-as.character(colData$Year_Sample)
 
 tse_pathway <- TreeSummarizedExperiment(assays = SimpleList(counts = as.matrix(pathway_assay)) ,
-                                        colData = colData,
-                                        rowData = pathway[ ,1])
+                                        colData = data.frame(samdat),
+                                        rowData = row_data_pathway)
+
+################################################################################
+#pathway_type_assay = (counts = pathway_type_assay)
+#colData = data.frame(samdat)
+#colData$Year_Sample<-as.character(colData$Year_Sample)
+
+tse_pathway_type <- TreeSummarizedExperiment(assays = SimpleList(counts = as.matrix(pathway_type_assay)) ,
+                                        colData = data.frame(samdat),
+                                        rowData = DataFrame(pathway_type[ ,1]))
+
 
 ################################################################################
 #Relative Abundance Assays
@@ -328,9 +424,9 @@ core_community_species = getPrevalence(tse, rank = "Species", detection = 0, pre
 core_community_species = data.frame(core_community_species)
 colnames(core_community_species) <- c("prevalence")
 core_community_species$core_community_species = rownames(core_community_species)
-core_community_species = core_community_species$core_community_species[core_community_species$prevalence ==  1]
+core_community_species_names = core_community_species$core_community_species[core_community_species$prevalence ==  1]
 print("on species level:")
-core_community_species
+core_community_species_names
 #plot prevalence of different phylum across most samples-
 #show prevalence of different phylum within the activated sludge microbiome of the activated sludge in SWWTP
 
@@ -462,6 +558,7 @@ dev.off()
 ################################################################################
 #Community Similarity
 
+#the environmental (process data has been normalized)
 
 # Perform RDA
 tse_species <- runRDA(tse_species,
@@ -470,12 +567,17 @@ tse_species <- runRDA(tse_species,
               distance = "bray",
               na.action = na.exclude)
 
+tse <- runRDA(tse,
+              assay.type = "relabundance",
+              formula = assay ~ INF_Cl_mg_per_l + INF_COD_mg_O2_per_l + INF_Nkj_mg_N_per_l + INF_PO4o_mg_P_per_l+  INF_SO4_µg_per_l + INF_TSS_mg_per_l + Glycerol_kg +Return_sludge_m3_per_h+ Inf_Flow_m3_per_h + Capacity_blowers_. +DW_AT_g_per_l+SVI_10 + T_avg_C,
+              distance = "bray",
+              na.action = na.exclude)
 #full equatiom: overly redundant 
 #formula = assay ~ INF_Cl_mg_per_l + INF_COD_mg_O2_per_l + INF_Nkj_mg_N_per_l + INF_PO4o_mg_P_per_l+  INF_SO4_µg_per_l + INF_TSS_mg_per_l + Glycerol_kg +Return_sludge_m3_per_h+ Inf_Flow_m3_per_h + Capacity_blowers_. + DW_AT_g_per_l + SVI_10 + T_avg_C,
 
 
 # Store results of PERMANOVA test
-rda_info <- attr(reducedDim(tse_species, "RDA"), "significance")
+rda_info <- attr(reducedDim(tse, "RDA"), "significance")
 
 #Print out rda_info
 rda_info$permanova |>
@@ -493,12 +595,64 @@ rda_info$homogeneity |>
 
 
 # Generate RDA plot coloured by clinical status
-plotRDA(tse_species, "RDA", colour_by = "Season")
+plotRDA(tse, "RDA", colour_by = "Season")
 #plotRDA(tse, "RDA")
 #From the plot above, we can see that only age significantly describes differences 
 #between the microbial profiles of different samples 
 #Statistically significant (P < 0.05)
 
+
+################################################################################
+library(stringr)
+
+## ???? Isolate metabolic pathways 
+
+##
+# Drop off those bacteria that do not include information in Phylum or lower levels
+mae[[1]] <- mae[[1]][!is.na(rowData(mae[[1]])$Phylum), ]
+# Clean taxonomy data, so that names do not include additional characters
+rowData(mae[[1]]) <- DataFrame(apply(rowData(mae[[1]]), 2, 
+                                     str_remove, pattern = "._[0-9]__"))
+
+
+# Agglomerate microbiome data at family level
+mae[[1]] <- mergeFeaturesByPrevalence(mae[[1]], rank = "Phylum")
+# Does log10 transform for microbiome data
+mae[[1]] <- transformAssay(mae[[1]], method = "log10", pseudocount = TRUE)
+
+# Give unique names so that we do not have problems when we are creating a plot
+rownames(mae[[1]]) <- getTaxonomyLabels(mae[[1]])
+
+# Cross correlates data sets
+correlations <- testExperimentCrossCorrelation(mae, 
+                                               experiment1 = 5,
+                                               experiment2 = 3,
+                                               assay.type1 = "relabundance", 
+                                               assay.type2 = "relabundance",
+                                               method = "spearman", 
+                                               p_adj_threshold = NULL,
+                                               cor_threshold = NULL,
+                                               # Remove when mia is fixed
+                                               mode = "matrix",
+                                               sort = TRUE,
+                                               show_warnings = FALSE)
+BiocManager::install("ComplexHeatmap")
+
+library(ComplexHeatmap) 
+
+# Create a heatmap and store it
+plot <- Heatmap(correlations$cor,
+                # Print values to cells
+                cell_fun = function(j, i, x, y, width, height, fill) {
+                  # If the p-value is under threshold
+                  if( !is.na(correlations$p_adj[i, j]) & correlations$p_adj[i, j] < 0.05 ){
+                    # Print "X"
+                    grid.text(sprintf("%s", "X"), x, y, gp = gpar(fontsize = 10, col = "#1dff00"))
+                  }
+                },
+                heatmap_legend_param = list(title = "", legend_height = unit(5, "cm"))
+)
+plot
 
 ################################################################################
 

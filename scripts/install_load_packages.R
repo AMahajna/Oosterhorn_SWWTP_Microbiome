@@ -156,5 +156,11 @@ if( !require("patchwork") ){
   library("patchwork")
 }
 
+if( !require("vegan") ){
+  install.packages("vegan")
+  library("vegan")
+}
+
+
 
 
