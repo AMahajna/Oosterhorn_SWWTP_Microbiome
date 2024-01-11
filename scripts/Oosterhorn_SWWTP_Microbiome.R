@@ -180,6 +180,16 @@ rownames(pathway_assay) = pathway$kegg_pathway
 assays = SimpleList(counts = assay_data)
 
 colData = data.frame(samdat)
+
+#add season based on date
+colData  <- colData  %>%
+  mutate(Season = case_when(
+    month(Sample_Date) %in% c(3, 4, 5) ~ "Spring",
+    month(Sample_Date) %in% c(6, 7, 8) ~ "Summer",
+    month(Sample_Date) %in% c(9, 10, 11) ~ "Fall",
+    month(Sample_Date) %in% c(12, 1, 2) ~ "Winter"
+  ))
+
 colData$Year_Sample<-as.character(colData$Year_Sample)
 colData$Sample_Date<-as.character(colData$Sample_Date)
 
@@ -397,7 +407,6 @@ dev.off()
 
 # Pick the top taxa
 top_features <- getTopFeatures(tse_species, method="median", top=10)
-
 # Check the information for these
 rowData(tse_species)[top_features, taxonomyRanks(tse_species)]
 
@@ -453,15 +462,17 @@ dev.off()
 ################################################################################
 #Community Similarity
 
+
 # Perform RDA
 tse_species <- runRDA(tse_species,
               assay.type = "relabundance",
-              formula = assay ~ INF_Cl_mg_per_l + INF_COD_mg_O2_per_l + INF_Nkj_mg_N_per_l +  INF_SO4_µg_per_l,
+              formula = assay ~ INF_Cl_mg_per_l + INF_COD_mg_O2_per_l + INF_Nkj_mg_N_per_l + INF_PO4o_mg_P_per_l+  INF_SO4_µg_per_l + INF_TSS_mg_per_l + Glycerol_kg +Return_sludge_m3_per_h+ Inf_Flow_m3_per_h + Capacity_blowers_. +DW_AT_g_per_l+SVI_10 + T_avg_C,
               distance = "bray",
               na.action = na.exclude)
 
-#For multiple values use this format: 
-#               formula = assay ~ ClinicalStatus + Gender + Age,
+#full equatiom: overly redundant 
+#formula = assay ~ INF_Cl_mg_per_l + INF_COD_mg_O2_per_l + INF_Nkj_mg_N_per_l + INF_PO4o_mg_P_per_l+  INF_SO4_µg_per_l + INF_TSS_mg_per_l + Glycerol_kg +Return_sludge_m3_per_h+ Inf_Flow_m3_per_h + Capacity_blowers_. + DW_AT_g_per_l + SVI_10 + T_avg_C,
+
 
 # Store results of PERMANOVA test
 rda_info <- attr(reducedDim(tse_species, "RDA"), "significance")
@@ -482,15 +493,11 @@ rda_info$homogeneity |>
 
 
 # Generate RDA plot coloured by clinical status
-plotRDA(tse_species, "RDA", colour_by = "Year_Sample")
+plotRDA(tse_species, "RDA", colour_by = "Season")
 #plotRDA(tse, "RDA")
 #From the plot above, we can see that only age significantly describes differences 
 #between the microbial profiles of different samples 
 #Statistically significant (P < 0.05)
-
-
-
-
 
 
 ################################################################################
