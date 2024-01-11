@@ -19,8 +19,7 @@ table_raw <- read_csv(file = "input_data/4717_groupby_filtered_all_summary_pathw
 
 #Relevant process data 
 process_data <- read_csv(file = "input_data/relevant_process_data.csv", show_col_types = FALSE)
-#The measure rarity is not used here 
-process_data <- process_data[-13]
+
 #Check the class of each column to be numeric 
 #sapply(process_data,class)
 
@@ -101,9 +100,42 @@ row_data_genes <-
   mutate_all(funs(str_replace(., "-$","NA"))) 
 
 ################################################################################
+#sample data _ goes in column data in TSE including the  
+
+process_data <- subset(process_data, select = -rarity)
+samdat = data.frame(cbind(samdat,process_data))
+#check dim of samdat it should be: 32*33
+#dim(samdat)
+
+################################################################################
+##plot missing data for both gene and taxa
+
+missing_tax_plot = row_data_tax %>% 
+  dplyr::select('domain', 'kingdom', 'phylum', 'class', 'order', 'family', 'genus','species_missing','species')%>% 
+  rename("spcies_strain"="species","species"="species_missing")
+
+png(filename="figures/missing_taxonomy.png" ,units = 'in',width=9, height=6, res=1000)
+plot_missing(missing_tax_plot, title = "missing data profile for taxonomy")
+dev.off()
+
+missing_genes_plot <- row_data_genes %>%
+  select(-uniprot_species_name)%>%
+  mutate_all(~ifelse(. == "NA", NA, 1))
+
+png(filename="figures/missing_functions.png" ,units = 'in',width=9, height=6, res=1000)
+plot_missing(missing_genes_plot, title = "missing data profile for functional data")
+dev.off()
+
+################################################################################
 #Multi-Assay Experiment 
 # 1.  "kegg_type_pathway"  
 # 2.  "kegg_pathway" 
+
+#The choice of the data structure as multi-assay experiment sperms from the fact
+#that missing_data in the functional genes dataset is too high to use reliably 
+#thus, the pathway data gets grouped and these is dimensionality reduction 
+
+#Note: KEGG metabolic pathways are relevant for the process 
 
 pathway_type = row_data_genes %>% 
   dplyr::select(kegg_type_pathway)
@@ -138,42 +170,53 @@ rownames(pathway_assay) = pathway$kegg_pathway
 
 #Check the grouping is correct 
 #sum(colSums(pathway_type[ ,-1]) == colSums(assay_df[ , -1])) should equal 32 n samples
-################################################################################
-#sample data _ goes in column data in TSE including the  
-samdat = data.frame(cbind(samdat,process_data))
-#check dim of samdat it should be: 32*33
-#dim(samdat)
-################################################################################
-##plot missing data for both gene and taxa
-
-missing_tax_plot = row_data_tax %>% 
-  dplyr::select('domain', 'kingdom', 'phylum', 'class', 'order', 'family', 'genus','species_missing','species')%>% 
-  rename("spcies_strain"="species","species"="species_missing")
-
-png(filename="figures/missing_taxonomy.png" ,units = 'in',width=9, height=6, res=1000)
-plot_missing(missing_tax_plot, title = "missing data profile for taxonomy")
-dev.off()
-
-missing_genes_plot <- row_data_genes %>%
-  select(-uniprot_species_name)%>%
-  mutate_all(~ifelse(. == "NA", NA, 1))
-
-png(filename="figures/missing_functions.png" ,units = 'in',width=9, height=6, res=1000)
-plot_missing(missing_genes_plot, title = "missing data profile for functional data")
-dev.off()
+#taxonomyRanks(tse)
 
 ################################################################################
+
+
 #Create TSE 
 #Add to colData the process parameters
 assays = SimpleList(counts = assay_data)
+
 colData = data.frame(samdat)
+
+#add season based on date
+colData  <- colData  %>%
+  mutate(Season = case_when(
+    month(Sample_Date) %in% c(3, 4, 5) ~ "Spring",
+    month(Sample_Date) %in% c(6, 7, 8) ~ "Summer",
+    month(Sample_Date) %in% c(9, 10, 11) ~ "Fall",
+    month(Sample_Date) %in% c(12, 1, 2) ~ "Winter"
+  ))
+
 colData$Year_Sample<-as.character(colData$Year_Sample)
+colData$Sample_Date<-as.character(colData$Sample_Date)
+
 rowData = data.frame(row_data_tax_reorder)
 
 tse<- TreeSummarizedExperiment(assays = assays,
                                colData = colData,
                                rowData = rowData
 )
+
+#taxonomyRanks(tse)
+################################################################################
+pathway_type_assay = (counts = pathway_type_assay)
+colData = data.frame(samdat)
+colData$Year_Sample<-as.character(colData$Year_Sample)
+
+tse_pathway_type <- TreeSummarizedExperiment(assays = SimpleList(counts = as.matrix(pathway_type_assay)) ,
+                                             colData = colData,
+                                             rowData = DataFrame(pathway_type[ ,1]))
+
+################################################################################
+#tax limited TSE 
+tse_species <- mergeFeaturesByRank(tse, "Species", na.rm=TRUE)
+
+################################################################################
+#tax limited TSE 
+tse_phylum <- mergeFeaturesByRank(tse, "Phylum", na.rm=TRUE)
 
 ################################################################################
 pathway_type_assay = (counts = pathway_type_assay)
@@ -192,24 +235,275 @@ colData$Year_Sample<-as.character(colData$Year_Sample)
 tse_pathway <- TreeSummarizedExperiment(assays = SimpleList(counts = as.matrix(pathway_assay)) ,
                                         colData = colData,
                                         rowData = pathway[ ,1])
+
+################################################################################
+#Relative Abundance Assays
+tse <- transformAssay(tse, method = "relabundance")
+tse_species <- transformAssay(tse_species, method = "relabundance")
+tse_phylum <- transformAssay(tse_phylum, method = "relabundance")
+tse_pathway <- transformAssay(tse_pathway, method = "relabundance")
+tse_pathway_type <- transformAssay(tse_pathway_type, method = "relabundance")
+
 ################################################################################
 #1. Can group by pathway and create a different TSE and analyze as MAE
 # Sum all samples, and then group by Phylum and pathway_type 
 #The do cross-correlation of other plots
 # Create an ExperimentList that includes experiments
-experiments <- ExperimentList(microbiome = tse, 
+experiments <- ExperimentList(microbiome = tse,
+                              tax = tse_species, 
+                              phylum = tse_phylum, 
                               pathways = tse_pathway,
                               type = tse_pathway_type)
 
 # Create a MAE
 mae <- MultiAssayExperiment(experiments = experiments)
 ################################################################################
+################################################################################
+#Exploration 
+
+################################################################################
+#Abundance Denisty: jitter plot 
+png(filename="figures/abundance_phylum.png" ,units = 'in',width=9, height=6, res=1000)
+plotAbundanceDensity(tse_phylum, layout = "jitter", assay.type = "relabundance",
+                     n = 40, colour_by="Sample_Date", point_size=2, point_shape=19) + 
+  scale_x_log10(label=scales::percent)
+dev.off()
+
+png(filename="figures/abundance_species.png" ,units = 'in',width=9, height=6, res=1000)
+plotAbundanceDensity(tse_species, layout = "jitter", assay.type = "relabundance",
+                     n = 40, colour_by="Sample_Date", point_size=2, point_shape=19) + 
+  scale_x_log10(label=scales::percent)
+dev.off()
+
+#We see that the core community is limited and most of the species/phylum are
+#less prevalent in our community 
+
+################################################################################
+#Abundance Density: density plot 
+
+#The relative abundance values for the top-5 taxonomic features can be visualized
+#as a density plot over a log scaled axis,
+png(filename="figures/density_species.png" ,units = 'in',width=9, height=6, res=1000)
+plotAbundanceDensity(tse_species, layout = "density", assay.type = "relabundance",
+                     n = 5, colour_by="Year_Sample", point_alpha=1/10) +
+  scale_x_log10()
+dev.off()
+
+png(filename="figures/density_phylum.png" ,units = 'in',width=9, height=6, res=1000)
+plotAbundanceDensity(tse_phylum, layout = "density", assay.type = "relabundance",
+                     n = 5, colour_by="Year_Sample", point_alpha=1/10) +
+  scale_x_log10()
+dev.off()
+
+#Abundance: of metabolic pathway and metabolic pathway type 
+png(filename="figures/density_pathway.png" ,units = 'in',width=9, height=6, res=1000)
+plotAbundanceDensity(tse_pathway, layout = "density", assay.type = "relabundance",
+                     n = 10, colour_by="Year_Sample", point_alpha=1/10) + 
+  scale_x_log10(label=scales::percent)
+dev.off()
+
+png(filename="figures/density_pathway_type.png" ,units = 'in',width=9, height=6, res=1000)
+plotAbundanceDensity(tse_pathway_type, layout = "density", assay.type = "relabundance",
+                     n = 10, colour_by="Year_Sample", point_alpha=1/10) + 
+  scale_x_log10(label=scales::percent)
+dev.off()
+################################################################################
+################################################################################
+#Prevalence 
+
+#Prevalence quantifies the frequency of samples where certain microbes were
+#detected (above a given detection threshold).
+################################################################################
+#Core community on Phylum level
+core_community_phylum = getPrevalence(tse, rank = "Phylum", detection = 0, prevalence = 99/100, sort = TRUE, as_relative = TRUE)
+core_community_phylum = data.frame(core_community_phylum)
+colnames(core_community_phylum) <- c("prevalence")
+core_community_phylum$core_community_phylum = rownames(core_community_phylum)
+core_community_phylum_names = core_community_phylum$core_community_phylum[core_community_phylum$prevalence ==  1]
+print("Core community is present is ")
+core_community_phylum_names
 
 
-tse <- transformAssay(tse, method = "relabundance")
+core_community_species = getPrevalence(tse, rank = "Species", detection = 0, prevalence = 99/100, sort = TRUE, as_relative = TRUE)
+core_community_species = data.frame(core_community_species)
+colnames(core_community_species) <- c("prevalence")
+core_community_species$core_community_species = rownames(core_community_species)
+core_community_species = core_community_species$core_community_species[core_community_species$prevalence ==  1]
+print("on species level:")
+core_community_species
+#plot prevalence of different phylum across most samples-
+#show prevalence of different phylum within the activated sludge microbiome of the activated sludge in SWWTP
+
+################################################################################
+#Plotting prevalence 
+#The prevalence of different life domains across all samples
+tse_domain <- mergeFeaturesByRank(tse, "Domain", na.rm=TRUE)
+altExp(tse, "Domain") <- tse_domain
+
+rowData(altExp(tse,"Domain"))$prevalence <- 
+  getPrevalence(altExp(tse,"Domain"), detection = 0, prevalence =100/100, sort = FALSE,
+                assay.type = "counts", as_relative = TRUE)
+
+png(filename="figures/prevalence_domain.png" ,units = 'in',width=9, height=6, res=1000)
+plotRowData(altExp(tse,"Domain"), "prevalence", colour_by = "Domain", point_size = 10)
+dev.off()
+#Here, I was trying to visualize the prevalence for all phylum present in 100% of 
+#the samples. However, there are way too many phylum in the plot
+#transposed_vector <- (t(core_community_phylum))
+#colnames(transposed_vector) <- transposed_vector[2, ]
+#transposed_vector <- transposed_vector[-2, ]
+#rowData(altExp(tse, "Phylum"))$prevalence <- transposed_vector
+#plotRowData(altExp(tse,"Phylum"), "prevalence", colour_by = "Phylum")
+################################################################################
+#Prevalence tree
+altExps(tse) <- splitByRanks(tse)
+altExps(tse) <-
+  lapply(altExps(tse),
+         function(y){
+           rowData(y)$prevalence <- 
+             getPrevalence(y, detection = 0, prevalence =100/100, sort = FALSE,
+                           assay.type = "counts", as_relative = TRUE)
+           y
+         })
+
+top_phyla_mean <- getTopFeatures(altExp(tse,"Phylum"),
+                                 method="mean",
+                                 top=5L,
+                                 assay.type="counts")
+x <- unsplitByRanks(tse, ranks = taxonomyRanks(tse)[1:6])
+x <- addTaxonomyTree(x)
+
+#The most abundance feature in the samples 
+#Prevalence of top phyla as judged by mean abundance
+png(filename="figures/abundant_phyla_prevalence_top5.png" ,units = 'in',width=9, height=6, res=1000)
+plotRowTree(x[rowData(x)$Phylum %in% top_phyla_mean,],
+                  edge_colour_by = "Phylum",
+                  tip_colour_by = "prevalence",
+                  node_colour_by = "prevalence")
+dev.off() 
+
+################################################################################
+#Rare taxa 
+
+# getRareFeatures returns the inverse
+#rare <- getRareFeatures(tse,
+#                        rank = "Phylum",
+#                        detection = 0,
+#                        prevalence = 10/100,
+#                        as_relative = TRUE)
+#head(rare)
+
+# Gets a subset of object that includes rare taxa
+#altExp(tse, "rare") <- subsetByRareFeatures(tse,
+#                                            rank = "Class",
+#                                            detection = 0.001,
+#                                            prevalence = 0.001,
+#                                            as_relative = TRUE)
+#altExp(tse, "rare")     
+
+################################################################################
+################################################################################
+#Quality Control
+
+# Pick the top taxa
+top_features <- getTopFeatures(tse_species, method="median", top=10)
+# Check the information for these
+rowData(tse_species)[top_features, taxonomyRanks(tse_species)]
+
+#Library Size/Read Count 
+#The total counts/sample can be calculated using perCellQCMetrics/addPerCellQC
+#from the scater package. The former one just calculates the values,
+#whereas the latter one directly adds them to colData.
+
+perCellQCMetrics(tse)
+tse <- addPerCellQC(tse)
+perCellQCMetrics(tse_species)
+tse_species <- addPerCellQC(tse_species)
+#colData(tse)
 
 
-#add functional gene data to the TSE
+p1 <- ggplot(as.data.frame(colData(tse_species))) +
+  geom_histogram(aes(x = sum), color = "black", fill = "gray", bins = 30) +
+  labs(x = "Library size", y = "Frequency (n)") + 
+  scale_x_log10(breaks = scales::trans_breaks("log10", function(x) 10^x), 
+  labels = scales::trans_format("log10", scales::math_format(10^.x))) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), # Removes the grid
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        axis.line = element_line(colour = "black")) # Adds y-axis
+
+
+df <- as.data.frame(colData(tse_species)) %>%
+  arrange(sum) %>%
+  mutate(index = 1:n())
+p2 <- ggplot(df, aes(y = index, x = sum/1e6)) +
+  geom_point() +  
+  labs(x = "Library size (million reads)", y = "Sample index") +  
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), # Removes the grid
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        axis.line = element_line(colour = "black")) # Adds y-axis
+
+#The distribution of calculated library sizes can be visualized as a histogram (left)
+#or by sorting the samples by library size (right).
+
+LibrarySize =p1 + p2
+
+png(filename="figures/library_size.png" ,units = 'in',width=9, height=6, res=1000)
+#pdf("figures/LibrarySize.pdf")
+print(LibrarySize)
+dev.off() 
+
+################################################################################
+################################################################################
+#Community Similarity
+
+
+# Perform RDA
+tse_species <- runRDA(tse_species,
+              assay.type = "relabundance",
+              formula = assay ~ INF_Cl_mg_per_l + INF_COD_mg_O2_per_l + INF_Nkj_mg_N_per_l + INF_PO4o_mg_P_per_l+  INF_SO4_µg_per_l + INF_TSS_mg_per_l + Glycerol_kg +Return_sludge_m3_per_h+ Inf_Flow_m3_per_h + Capacity_blowers_. +DW_AT_g_per_l+SVI_10 + T_avg_C,
+              distance = "bray",
+              na.action = na.exclude)
+
+#full equatiom: overly redundant 
+#formula = assay ~ INF_Cl_mg_per_l + INF_COD_mg_O2_per_l + INF_Nkj_mg_N_per_l + INF_PO4o_mg_P_per_l+  INF_SO4_µg_per_l + INF_TSS_mg_per_l + Glycerol_kg +Return_sludge_m3_per_h+ Inf_Flow_m3_per_h + Capacity_blowers_. + DW_AT_g_per_l + SVI_10 + T_avg_C,
+
+
+# Store results of PERMANOVA test
+rda_info <- attr(reducedDim(tse_species, "RDA"), "significance")
+
+#Print out rda_info
+rda_info$permanova |>
+  knitr::kable()
+
+#To ensure that the homogeneity assumption holds, we retrieve the corresponding 
+#information from the results of RDA. In this case, none of the p-values is lower 
+#than the significance threshold, and thus homogeneity is observed.
+rda_info$homogeneity |>
+  knitr::kable()
+
+#visualize the weight and significance of each variable on the similarity
+#between samples with an RDA plot
+# Load packages for plotting function
+
+
+# Generate RDA plot coloured by clinical status
+plotRDA(tse_species, "RDA", colour_by = "Season")
+#plotRDA(tse, "RDA")
+#From the plot above, we can see that only age significantly describes differences 
+#between the microbial profiles of different samples 
+#Statistically significant (P < 0.05)
+
+
+################################################################################
+
+
+#add functional gene tse_species#add functional gene data to the TSE
 # modify the Description entries
 #colData(tse)$Description <- paste(colData(tse)$Description, "modified description")
 # view modified variable
@@ -223,11 +517,6 @@ tse <- transformAssay(tse, method = "relabundance")
 
 
 
-
-#Abundance
-plotAbundanceDensity(tse, layout = "jitter", assay.type = "relabundance",
-                     n = 40, point_size=1, point_shape=19, point_alpha=0.1) + 
-  scale_x_log10(label=scales::percent)
 
 
 unique(tse$Year_Sample)
@@ -316,113 +605,8 @@ rowData(altExp(tse,"Domain"))$prevalence <-
   getPrevalence(altExp(tse,"Domain"), detection = 1/100, sort = FALSE,
                 assay.type = "counts", as_relative = TRUE)
 
-library(scater)
-plotRowData(altExp(tse,"Domain"), "prevalence", colour_by = "Domain")
-
-#Prevalence tree
-
-altExps(tse) <- splitByRanks(tse)
-altExps(tse) <-
-  lapply(altExps(tse),
-         function(y){
-           rowData(y)$prevalence <- 
-             getPrevalence(y, detection = 1/100, sort = FALSE,
-                           assay.type = "counts", as_relative = TRUE)
-           y
-         })
-top_phyla <- getTopFeatures(altExp(tse,"Phylum"),
-                            method="prevalence",
-                            top=5L,
-                            assay.type="counts")
-top_phyla_mean <- getTopFeatures(altExp(tse,"Phylum"),
-                                 method="mean",
-                                 top=5L,
-                                 assay.type="counts")
-x <- unsplitByRanks(tse, ranks = taxonomyRanks(tse)[1:6])
-x <- addTaxonomyTree(x)
-
-library(miaViz)
-
-#Figure 5.1: Prevalence of top phyla as judged by prevalence
-#plotRowTree(x[rowData(x)$Phylum %in% top_phyla,],
-edge_colour_by = "Phylum",
-tip_colour_by = "prevalence",
-node_colour_by = "prevalence")
-
-#Figure 5.2: Prevalence of top phyla as judged by mean abundance
-Tree =plotRowTree(x[rowData(x)$Phylum %in% top_phyla_mean,],
-                  edge_colour_by = "Phylum",
-                  tip_colour_by = "prevalence",
-                  node_colour_by = "prevalence")
-pdf("figures/Tree.pdf")
-print(Tree)
-dev.off() 
 
 
-#Quality Control 
-#Top Taxa 
-# Pick the top taxa
-top_features <- getTopFeatures(tse, method="median", top=10)
-
-# Check the information for these
-rowData(tse)[top_features, taxonomyRanks(tse)]
-
-#Library Size/Read Count 
-#The total counts/sample can be calculated using perCellQCMetrics/addPerCellQC
-#from the scater package. The former one just calculates the values,
-#whereas the latter one directly adds them to colData.
-
-library(scater)
-perCellQCMetrics(tse)
-tse <- addPerCellQC(tse)
-#colData(tse)
-
-
-#plotting library size 
-library(ggplot2)
-
-p1 <- ggplot(as.data.frame(colData(tse))) +
-  geom_histogram(aes(x = sum), color = "black", fill = "gray", bins = 30) +
-  labs(x = "Library size", y = "Frequency (n)") + 
-  # scale_x_log10(breaks = scales::trans_breaks("log10", function(x) 10^x), 
-  # labels = scales::trans_format("log10", scales::math_format(10^.x))) +
-  theme_bw() +
-  theme(panel.grid.major = element_blank(), # Removes the grid
-        panel.grid.minor = element_blank(),
-        panel.border = element_blank(),
-        panel.background = element_blank(),
-        axis.line = element_line(colour = "black")) # Adds y-axis
-
-library(dplyr)
-df <- as.data.frame(colData(tse)) %>%
-  arrange(sum) %>%
-  mutate(index = 1:n())
-p2 <- ggplot(df, aes(y = index, x = sum/1e6)) +
-  geom_point() +  
-  labs(x = "Library size (million reads)", y = "Sample index") +  
-  theme_bw() +
-  theme(panel.grid.major = element_blank(), # Removes the grid
-        panel.grid.minor = element_blank(),
-        panel.border = element_blank(),
-        panel.background = element_blank(),
-        axis.line = element_line(colour = "black")) # Adds y-axis
-
-library(patchwork)
-LibrarySize =p1 + p2
-
-#png("figures/LibrarySize.png")
-#print(LibrarySize)
-#dev.off()
-
-pdf("figures/LibrarySize.pdf")
-print(LibrarySize)
-dev.off() 
-
-#ggsave("figures/LibrarySize.png", plot = p1+p2)
-
-#Incorporate the Maybe "season" data into colData 
-#Figure 5.4: Library sizes per sample.
-#Figure 5.5: Library sizes per sample type.
 
 #Chapter: Taxonomic information 
 #we will refer to co-abundant groups as CAGs, 
@@ -437,10 +621,7 @@ dev.off()
 #table(taxonomyRankEmpty(tse, rank = "Genus"))
 #head(getTaxonomyLabels(tse,with_rank = TRUE))
 
-#Generate a taxonomic tree on the fly
-taxonomyTree(tse)
-tse <- addTaxonomyTree(tse)
-#tse
+
 
 #assay(altExp(tse, "Family"), "relabundance")[1:5, 1:7]
 
@@ -765,41 +946,6 @@ ggplot(df, aes(x = d0, y = dmds)) +
        y = "MDS distance",   
        subtitle = paste("Stress:", round(stress, 2))) +
   theme_bw()
-
-# Perform RDA
-tse <- runRDA(tse,
-              assay.type = "relabundance",
-              formula = assay ~ Year_Sample,
-              distance = "bray",
-              na.action = na.exclude)
-
-#For multiple values use this format: 
-#               formula = assay ~ ClinicalStatus + Gender + Age,
-
-# Store results of PERMANOVA test
-rda_info <- attr(reducedDim(tse, "RDA"), "significance")
-
-#Print out rda_info
-rda_info$permanova |>
-  knitr::kable()
-
-#To ensure that the homogeneity assumption holds, we retrieve the corresponding 
-#information from the results of RDA. In this case, none of the p-values is lower 
-#than the significance threshold, and thus homogeneity is observed.
-rda_info$homogeneity |>
-  knitr::kable()
-
-#visualize the weight and significance of each variable on the similarity
-#between samples with an RDA plot
-# Load packages for plotting function
-library(miaViz)
-
-# Generate RDA plot coloured by clinical status
-plotRDA(tse, "RDA", colour_by = "Year_Sample")
-#plotRDA(tse, "RDA")
-#From the plot above, we can see that only age significantly describes differences 
-#between the microbial profiles of different samples 
-#Statistically significant (P < 0.05)
 
 
 

@@ -151,6 +151,10 @@ if( !require("DescTools") ){
   library("DescTools")
 }
 
+if( !require("patchwork") ){
+  install.packages("patchwork")
+  library("patchwork")
+}
 
 
 
