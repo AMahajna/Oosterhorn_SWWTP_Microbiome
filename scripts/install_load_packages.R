@@ -46,6 +46,11 @@ if( !require("scater") ) {
   library("scater")
 }
 
+if( !require("ComplexHeatmap") ) {
+  BiocManager::install("ComplexHeatmap")
+  library("ComplexHeatmap")
+}
+
 if( !require("devtools") ) {
   install.packages("devtools")
   library("devtools")

@@ -73,15 +73,13 @@ assay_data <-
   rename_with(~gsub("X","",.x)) %>% 
   as.data.frame()
 
-
-
 #make row name the unique entity is for row data that contains gene data 
 rownames(assay_data) = assay_data$uniprot_species_name
 #Here we take only numeric data and convert to matrix for assay data
 #The unique entity data is row names in the matrix 
-assay_df = assay_data
-assay_data = assay_data[,-1] %>% as.matrix()
 
+assay_data = assay_data[,-1] %>% as.matrix()
+assay_df = as.data.frame(assay_data)
 ################################################################################
 #taxonomic data _ goes in row data in TSE 
 row_data_tax <-
@@ -95,9 +93,9 @@ names(row_data_tax)[names(row_data_tax) == 'species_strain'] <- "species"
 #check
 #colnames(row_data_tax)
 #reorder taxonomic ordering 
-row_data_tax_reorder = select(row_data_tax,uniprot_species_name, domain, kingdom, phylum, class, order, family, genus,species, everything())
+row_data_tax = select(row_data_tax,uniprot_species_name, domain, kingdom, phylum, class, order, family, genus,species, everything())
 #capitalize taxonomy name 
-colnames(row_data_tax_reorder) <- c('uniprot_species_name', 'Domain', 'Kingdom', 'Phylum', 'Class', 'Order', 'Family', 'Genus','Species',"taxid","species_missing")
+colnames(row_data_tax) <- c('uniprot_species_name', 'Domain', 'Kingdom', 'Phylum', 'Class', 'Order', 'Family', 'Genus','Species',"taxid","species_missing")
 
 ################################################################################
 #Functional data of enzymes _ goes in row data in TSE 
@@ -114,6 +112,7 @@ process_data <- subset(process_data, select = -rarity)
 #Standardize environmental data - reflect on standardization method choice 
 process_data <- decostand(process_data, method ="log")
 
+#create season column 
 samdat <- samdat  %>%
   mutate(Season = case_when(
     month(Sample_Date) %in% c(3, 4, 5) ~ "Spring",
@@ -122,7 +121,7 @@ samdat <- samdat  %>%
     month(Sample_Date) %in% c(12, 1, 2) ~ "Winter"
   ))
 
-#for coloring in groups and clustering 
+#Covert to charater for coloring in groups and clustering 
 samdat$Year_Sample<-as.character(samdat$Year_Sample)
 samdat$Sample_Date<-as.character(samdat$Sample_Date)
 
@@ -151,6 +150,7 @@ plot_missing(missing_genes_plot, title = "missing data profile for functional da
 dev.off()
 
 ################################################################################
+#Here 
 #Multi-Assay Experiment 
 # 1.  "kegg_type_pathway"  
 # 2.  "kegg_pathway" 
@@ -161,13 +161,15 @@ dev.off()
 
 #Note: KEGG metabolic pathways are relevant for the process 
 
-
+'''
 pathway_class = row_data_genes %>% 
   dplyr::select(kegg_class_pathway,kegg_type_pathway, kegg_pathway)
 #check chould be TRUE FALSE 
 #dim(assay_df) == dim(pathway_class)
 pathway_class = cbind(pathway_class,assay_df)
 rownames(pathway_class) <- NULL
+
+
 
 #Extract Metabolism related pathway data 
 pathway_metabolism =  pathway_class[pathway_class$kegg_class_pathway == "A09100 Metabolism", ]
@@ -183,16 +185,16 @@ pathway_other = colSums(pathway_class[pathway_class$kegg_class_pathway != "A0910
 pathway_other$kegg_class_pathway ="Other pathway class"
 pathway_other$kegg_type_pathway = "Other pathway type"
 pathway_other$kegg_pathway ="Other pathway "
-pathway_other %>% 
-  dplyr::select(kegg_pathway,kegg_type_pathway, kegg_class_pathway,  everything())%>% 
-  data.frame()
+#pathway_other %>% 
+#  dplyr::select(kegg_pathway,kegg_type_pathway, kegg_class_pathway,  everything())%>% 
+#  data.frame()
 
 #We add it to total assay 
 pathway_metabolism_other = rbind(pathway_metabolism,pathway_other)
 
 #Check the sum of reads in the new dataframe 
 sum(colSums(pathway_metabolism_other[ ,-c(1,2,3)]) == colSums(assay_df)) 
-#should equal 32 n samples = if it's equal to 32 meaning grouping went right
+#should equal 32 n samples = if its equal to 32 meaning grouping went right
 
 pathway_assay = as.data.frame(pathway_metabolism_other[ ,4:ncol(pathway_metabolism_other)]) 
 rownames(pathway_assay) = pathway_metabolism_other$kegg_pathway
@@ -212,30 +214,156 @@ row_data_pathway = pathway_metabolism_other[ ,1:2]
 #pathway_type_df <- t(pathway_type[, -1])  
 #colnames(pathway_type_df) <- pathway_type$kegg_type_pathway
 
+'''
 ################################################################################
-#Assay for pathway_type
+#Alternative grouping of metabolic pathways 
 
-#Group by metabolism type
-pathway_metabolism_type <- pathway_metabolism %>%
-  group_by(kegg_type_pathway) %>%
+#Merge all elements for proper grouping 
+pathway = cbind(assay_df,row_data_tax, row_data_genes)
+
+#Remove duplicate (uniprot_species_name)
+pathway = pathway[, -44] 
+
+#Remove prvious rownames as this will be updated after grouping 
+rownames(pathway) <- NULL
+
+kegg_class_pathway = unique(pathway$kegg_class_pathway)
+n_kegg_class_pathway =length(unique(pathway$kegg_class_pathway))
+
+kegg_type_pathway = unique(pathway$kegg_type_pathway)
+n_kegg_type_pathway =length(unique(pathway$kegg_type_pathway))
+
+kegg_pathway = unique(pathway$kegg_pathway)
+n_kegg_type = length(unique(pathway$kegg_pathway))
+
+#Extract brite related pathway data 
+pathway_brite =  pathway[pathway$kegg_class_pathway == "A09180 Brite Hierarchies", ]
+
+#Group by brite pathway and brite pathway type and sum reads respectively  
+pathway_brite_grouped <- pathway_brite %>%
+  group_by(kegg_pathway,kegg_type_pathway, kegg_class_pathway) %>%
   summarise(across(where(is.numeric), sum)) %>%
   arrange(kegg_type_pathway)
 
+#Remove irrrelevant taxid
+pathway_brite_grouped = pathway_brite_grouped[, -36]
+
+#check that grouped conducted correctly : this value should be 32 
+sum(colSums(pathway_brite_grouped[ ,4:35]) == colSums(pathway_brite[ ,1:32]))
+
+##We must add to this two different rows: one for NA pathways and another for other pathways
+# We sum up all na pathways 
+pathway_na =  pathway[pathway$kegg_class_pathway == "NA", ]
+pathway_na = colSums(pathway_na[ ,1:32])
+
+# We sum up all other pathways 
+pathway_other =  pathway[pathway$kegg_class_pathway != "NA", ]
+pathway_other =  pathway_other[pathway_other$kegg_class_pathway != "A09180 Brite Hierarchies", ]
+pathway_other = colSums(pathway_other[ ,1:32])
+
+##Now we bind the two other 
+brite = rbind(pathway_brite_grouped, pathway_na, pathway_other)
+brite[15,1] = "other"
+brite[15,2] = "other"
+brite[15,3] = "other"
+brite[14,1] = "NA"
+brite[14,2] = "NA"
+brite[14,3] = "NA"
+#check: must be 32 
+sum(colSums(brite[ ,4:35]) == colSums(assay_df))
+
+#metabolism_assay
+
+brite_assay = as.data.frame(brite[ ,4:35])
+rownames(brite_assay) = brite$kegg_pathway
+
+#row_data_metabolism
+row_data_brite = brite[ ,2:3]
+################################################################################
+#grouping based in metabolism type
+metabolism_type <- pathway_metabolism %>%
+  group_by(kegg_type_pathway, kegg_class_pathway) %>%
+  summarise(across(where(is.numeric), sum)) %>%
+  arrange(kegg_type_pathway)
+
+metabolism_type = metabolism_type[, -35]
+
+metabolism_type = rbind(metabolism_type, pathway_na, pathway_other)
+metabolism_type[13,1] = "other"
+metabolism_type[13,2] = "other"
+
+#check: must be 32 
+sum(colSums(metabolism_type[ ,3:34]) == colSums(assay_df))
+
+#metabolism_type_assay
+metabolism_type[12,1] = "NA"
+metabolism_type[12,2] = "NA"
+metabolism_type_assay = as.data.frame(metabolism_type[ ,3:34])
+rownames(metabolism_type_assay) = metabolism_type$kegg_type_pathway
+
+#row_data_metabolism
+row_data_metabolism_type = metabolism_type[ ,2]
+################################################################################
+#grouping based in metabolism type
+pathway_class <- pathway %>%
+  group_by(kegg_class_pathway) %>%
+  summarise(across(where(is.numeric), sum)) %>%
+  arrange(kegg_class_pathway)
+
+pathway_class = pathway_class[, -34]
+
+#check: must be 32 
+sum(colSums(pathway_class[ ,2:33]) == colSums(assay_df))
+
+#metabolism_type_assay
+pathway_class[9,1] = "NA"
+pathway_class_assay = as.data.frame(pathway_class[ ,2:33])
+rownames(pathway_class_assay) = pathway_class$kegg_class_pathway
+
+#row_data_metabolism
+row_data_pathway_class = pathway_class[ ,1]
+#################################################################################
+#Removal Efficiency TSE 
+Rem_Eff = samdat[ , c(1,26:29)] 
+Rem_Eff = as.data.frame(t(Rem_Eff))
+colnames(Rem_Eff) = Rem_Eff[1, ]
+Rem_Eff = Rem_Eff[-1, ]
+Rem_Eff_assay = mutate_all(Rem_Eff, function(x) as.numeric(as.character(x)))
+row_data_Rem_Eff = as_tibble(rownames(Rem_Eff))
+colnames(row_data_Rem_Eff) = "removal measure"
+################################################################################
+#Recursive Feature Elimination 
+#Which pathways best predict the removal efficiency 
+rfe_df = as.data.frame(t(pathway_class))
+colnames(rfe_df) = rfe_df[1, ]
+rfe_df = rfe_df[-1, ]
+rfe_df = cbind(rfe_df,samdat[ , c(1,26:29)]) 
+rfe_df = rfe_df[ ,-10 ]
+rfe_df= mutate_all(rfe_df, function(x) as.numeric(as.character(x)))
+
+set.seed(644781)
+rfe_fit<- rfeTerminator(rfe_df, x_cols= 1:9, y_cols=13, alter_df = TRUE, eval_funcs = rfFuncs)
+
+
+################################################################################
+'''''''
+pathway_other = colSums(pathway_class[pathway_class$kegg_class_pathway != "A09100 Metabolism", -c(1, 2,3)])
+pathway_other$kegg_class_pathway ="Other pathway class"
+pathway_other$kegg_type_pathway = "Other pathway type"
+pathway_other$kegg_pathway ="Other pathway "
+#pathway_other %>% 
+#  dplyr::select(kegg_pathway,kegg_type_pathway, kegg_class_pathway,  everything())%>% 
+#  data.frame()
+
 #We add it to total assay 
-pathway_other = pathway_other %>%
-  as.data.frame()%>%
-  dplyr::select(-kegg_class_pathway,-kegg_pathway)%>%
-  select(kegg_type_pathway, everything())
-
-
-pathway_metabolism_type_other = rbind(pathway_metabolism_type,pathway_other)
+pathway_metabolism_other = rbind(pathway_metabolism,pathway_other)
 
 #Check the sum of reads in the new dataframe 
 sum(colSums(pathway_metabolism_other[ ,-c(1,2,3)]) == colSums(assay_df)) 
-#should equal 32 n samples = if it's equal to 32 meaning grouping went right
+#should equal 32 n samples = if its equal to 32 meaning grouping went right
 
-pathway_type_assay = as.data.frame(pathway_metabolism_other[ ,4:ncol(pathway_metabolism_other)]) 
-rownames(pathway_type_assay) = pathway_metabolism_type_other$kegg_type_pathway
+pathway_assay = as.data.frame(pathway_metabolism_other[ ,4:ncol(pathway_metabolism_other)]) 
+rownames(pathway_assay) = pathway_metabolism_other$kegg_pathway
 
 #Check 
 length(colnames(pathway_assay))
@@ -252,23 +380,51 @@ row_data_pathway = pathway_metabolism_other[ ,1:2]
 #pathway_type_df <- t(pathway_type[, -1])  
 #colnames(pathway_type_df) <- pathway_type$kegg_type_pathway
 
+'''
 
+################################################################################
+#Assay for pathway_type
+'''
+#Group by metabolism type
+pathway_metabolism_type <- pathway_metabolism %>%
+  group_by(kegg_type_pathway) %>%
+  summarise(across(where(is.numeric), sum)) %>%
+  arrange(kegg_type_pathway)
+
+elements_to_remove <- c("kegg_pathway", "kegg_class_pathway")
+
+# Remove elements from the list
+pathway_other <- pathway_other[setdiff(names(pathway_other), elements_to_remove)]
+
+#We add it to total assay 
+pathway_metabolism_type_other = rbind(pathway_metabolism_type,pathway_other)
+
+#Check the sum of reads in the new dataframe 
+sum(colSums(pathway_metabolism_type_other[ ,-c(1)]) == colSums(assay_df)) 
+#should equal 32 n samples = if its equal to 32 meaning grouping went right
+
+pathway_type_assay = as.data.frame(pathway_metabolism_type_other[ ,1:ncol(pathway_metabolism_type_other)]) 
+#rownames(pathway_type_assay) = pathway_metabolism_type_other$kegg_type_pathway
+
+#Check 
+length(colnames(pathway_assay))
+#should be 32 
+nrow(pathway_assay) == nrow(pathway_metabolism_other$kegg_pathway)
+#Should be true 
+
+#set rownames to pathway name to convert into assay for TSE_pathway
+#rownames(pathway_assay) = pathway_metabolism_other$kegg_pathway
+row_data_pathway = pathway_metabolism_other[ ,1:2]
+#row_data_pathway = as.data.frame(row_data_pathway)
+#rownames(row_data_pathway) = row_data_pathway$kegg_pathway
+#row_data_pathway = row_data_pathway[ ,2]
+#pathway_type_df <- t(pathway_type[, -1])  
+#colnames(pathway_type_df) <- pathway_type$kegg_type_pathway
+
+'''
 
 
 ################################################################################
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 #Check the grouping is correct 
 #sum(colSums(pathway_type[ ,-1]) == colSums(assay_df[ , -1])) should equal 32 n samples
@@ -313,49 +469,153 @@ tse_species <- mergeFeaturesByRank(tse, "Species", na.rm=TRUE)
 tse_phylum <- mergeFeaturesByRank(tse, "Phylum", na.rm=TRUE)
 
 ################################################################################
-#pathway TSE
-#pathway_assay = (counts = pathway_assay)
-#colData = data.frame(samdat)
-#colData$Year_Sample<-as.character(colData$Year_Sample)
-
-tse_pathway <- TreeSummarizedExperiment(assays = SimpleList(counts = as.matrix(pathway_assay)) ,
+tse_brite <- TreeSummarizedExperiment(assays = SimpleList(counts = as.matrix(brite_assay)) ,
                                         colData = data.frame(samdat),
-                                        rowData = row_data_pathway)
-
+                                        rowData = row_data_brite)
 ################################################################################
-#pathway_type_assay = (counts = pathway_type_assay)
-#colData = data.frame(samdat)
-#colData$Year_Sample<-as.character(colData$Year_Sample)
-
-tse_pathway_type <- TreeSummarizedExperiment(assays = SimpleList(counts = as.matrix(pathway_type_assay)) ,
+tse_metabolism_type <- TreeSummarizedExperiment(assays = SimpleList(counts = as.matrix(metabolism_type_assay)) ,
                                         colData = data.frame(samdat),
-                                        rowData = DataFrame(pathway_type[ ,1]))
-
-
+                                        rowData = DataFrame(row_data_metabolism_type))
+################################################################################
+tse_pathways <- TreeSummarizedExperiment(assays = SimpleList(counts = as.matrix(pathway_class_assay)) ,
+                                                colData = data.frame(samdat),
+                                                rowData = DataFrame(row_data_pathway_class))
+################################################################################
+tse_re <- TreeSummarizedExperiment(assays = SimpleList(counts = as.matrix(Rem_Eff_assay)) ,
+                                         colData = data.frame(samdat),
+                                         rowData = row_data_Rem_Eff)
 ################################################################################
 #Relative Abundance Assays
 tse <- transformAssay(tse, method = "relabundance")
 tse_species <- transformAssay(tse_species, method = "relabundance")
 tse_phylum <- transformAssay(tse_phylum, method = "relabundance")
-tse_pathway <- transformAssay(tse_pathway, method = "relabundance")
-tse_pathway_type <- transformAssay(tse_pathway_type, method = "relabundance")
+tse_metabolism <- transformAssay(tse_metabolism, method = "relabundance")
+tse_metabolism_type <- transformAssay(tse_metabolism_type, method = "relabundance")
+tse_pathways <- transformAssay(tse_pathways, method = "relabundance")
 
 ################################################################################
 #1. Can group by pathway and create a different TSE and analyze as MAE
 # Sum all samples, and then group by Phylum and pathway_type 
 #The do cross-correlation of other plots
 # Create an ExperimentList that includes experiments
-experiments <- ExperimentList(microbiome = tse,
+experiments <- ExperimentList(genes = tse,
                               tax = tse_species, 
                               phylum = tse_phylum, 
-                              pathways = tse_pathway,
-                              type = tse_pathway_type)
+                              pathways = tse_pathways, 
+                              brite = tse_brite,
+                              type = tse_metabolism_type, 
+                              removal= tse_re )
 
 # Create a MAE
 mae <- MultiAssayExperiment(experiments = experiments)
 ################################################################################
+## Multi-omics
+#Reflect on the assay type to use log10 transform, relabundance, counts...
+#Also reflect on the correlation (Pearson vs. Spearson )
+#Challenge assumption: check whether other type of pathway is responsible for removal e. 
+
+mae[[4]] <- transformAssay(mae[[4]], method = "log10", pseudocount = TRUE)
+mae[[3]] <- transformAssay(mae[[3]], method = "log10", pseudocount = TRUE)
+mae[[5]] <- transformAssay(mae[[5]], method = "log10", pseudocount = TRUE)
+
+brite = pathway[pathway$kegg_class_pathway == "A09180 Brite Hierarchies", ]
+
+#factor(rowData(mae[[5]])$kegg_type_pathway)
+correlations <- testExperimentCrossCorrelation(mae, 
+                                               experiment1 = 5,
+                                               experiment2 = 3,
+                                               assay.type1 = "log10", 
+                                               assay.type2 = "log10",
+                                               method = "spearman", 
+                                               p_adj_threshold = NULL,
+                                               cor_threshold = NULL,
+                                               # Remove when mia is fixed
+                                               mode = "matrix",
+                                               sort = TRUE,
+                                               show_warnings = FALSE)
+
+
+# Create a heatmap and store it
+order_list =rownames(data.frame(correlations))
+ha =c("metabolism", "GIP","metabolism", "NA", 
+   "metabolism","metabolism", "metabolism",
+   "GIP","GIP","GIP","metabolism","SCP", "other",
+   "GIP", "GIP")
+
+plot <- Heatmap(correlations$cor,
+                right_annotation = rowAnnotation(pathway_type = ha),
+                # Print values to cells
+                cell_fun = function(j, i, x, y, width, height, fill) {
+                  # If the p-value is under threshold
+                  if( !is.na(correlations$p_adj[i, j]) & correlations$p_adj[i, j] < 0.05 ){
+                    # Print "X"
+                    grid.text(sprintf("%s", "X"), x, y, gp = gpar(fontsize = 7, col = "#1dff00"))
+                  }
+                },
+                heatmap_legend_param = list(title = "", legend_height = unit(8, "cm")),
+                column_names_rot = 90, 
+                row_names_rot = 315, 
+                column_names_gp = gpar(fontsize = 5),
+                row_names_gp = gpar(fontsize = 7),
+                )
+plot
+
+
+
+png(filename="figures/heatmap_mae.png" ,units = 'in',width=9, height=6, res=1000)
+plot
+dev.off()
+
+
 ################################################################################
-#Exploration 
+#Clustering 
+
+BiocManager::install("cobiclust")
+library(cobiclust)
+
+mae[[3]] <- transformAssay(mae[[3]], method = "rclr")
+
+
+# Do clustering using counts table
+clusters <- cobiclust(assay(mae[[3]], "counts"))
+
+# Get clusters
+row_clusters <- rowData(mae[[5]])$kegg_type_pathway ##
+col_clusters <- clusters$classification$colclass
+
+# Add clusters to rowdata and coldata
+rowData(mae[[5]])$clusters <- factor(rowData(mae[[5]])$kegg_type_pathway)  ##
+colData(mae[[3]])$clusters <- factor(col_clusters)
+
+# Order data based on clusters
+mae[[3]] <- mae[[3]][order(rowData(mae[[3]])$clusters),
+                     order(colData(mae[[3]])$clusters)]
+
+# Print clusters
+clusters$classification
+
+library(pheatmap)
+
+mae[[3]] <- transformAssay(mae[[3]], assay.type = "rclr",
+                           MARGIN = "features", method = "z", name = "rclr_z")
+
+# Create annotations. When column names are equal, they should share levels.
+# Here samples include 3 clusters, and taxa 2. That is why we have to make
+# column names unique.
+annotation_col <- data.frame(colData(mae[[3]])[, "clusters", drop = F])
+colnames(annotation_col) <- "col_clusters"
+
+annotation_row <- data.frame(rowData(mae[[3]])[, "clusters", drop = F])
+colnames(annotation_row) <- "row_clusters"
+
+#plot
+pheatmap(assay(mae[[3]], "rclr_z"), cluster_rows = F, cluster_cols = F,
+         annotation_col = annotation_col, annotation_row = annotation_row)
+
+
+################################################################################
+
+
 
 ################################################################################
 #Abundance Denisty: jitter plot 
