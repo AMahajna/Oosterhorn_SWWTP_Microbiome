@@ -1,6 +1,6 @@
 #To do: 
-# 1. bicluster according to 10.4.1 
-# cluster is pathway class and heatmap is sample id. 
+# 1. Create a 3D barplot (Legoplots in R) 
+#x is sample date, y is the tax, and z is the pathway for core community 
 ################################################################################
 ##Create folder for project organization
 
@@ -281,6 +281,18 @@ rownames(brite_assay) = brite$kegg_pathway
 row_data_brite = brite[ ,2:3]
 ################################################################################
 #grouping based in metabolism type
+
+pathway_sum =  pathway[pathway$kegg_pathway != "NA", ]
+pathway_sum = colSums(pathway_sum[ ,1:32])
+pathway_percentage = pathway_sum/colSums(pathway[ ,1:32]) *100
+
+degradation=  pathway[pathway$kegg_pathway == "Peptidoglycan biosynthesis and degradation proteins", ]
+#Choose relevant colums here 
+pathway_not_deg =  colSums(pathway[pathway$kegg_pathway != "Peptidoglycan biosynthesis and degradation proteins", ])
+pathway_not_deg_not_na =  colSums(pathway_not_deg[pathway_not_deg$kegg_pathway != "NA", ])
+
+degradation_complete = rbind(degradation, pathway_not_deg, pathway_not_deg_not_na)
+
 metabolism_type <- pathway_metabolism %>%
   group_by(kegg_type_pathway, kegg_class_pathway) %>%
   summarise(across(where(is.numeric), sum)) %>%
@@ -341,11 +353,72 @@ rfe_df = cbind(rfe_df,samdat[ , c(1,26:29)])
 rfe_df = rfe_df[ ,-10 ]
 rfe_df= mutate_all(rfe_df, function(x) as.numeric(as.character(x)))
 
-set.seed(644781)
-rfe_fit<- rfeTerminator(rfe_df, x_cols= 1:9, y_cols=13, alter_df = TRUE, eval_funcs = rfFuncs)
+set.seed(6481)
+rfe_fit<- rfeTerminator(rfe_df, x_cols= 1:9, y_cols=13, alter_df = TRUE, eval_funcs = rfFuncs,  method = "loocv")
+
+#Explore the optimal model results
+#print(rfe_fit$rfe_model_fit_results)
+# Explore the optimal variables selected
+#print(rfe_fit$rfe_model_fit_results$optVariables)
+# Explore the original data passed to the frame
+#print(head(rfe_fit$rfe_original_data))
+# Explore the data adapted with the less important features removed
+#print(head(rfe_fit$rfe_reduced_data))
+
+################################################################################
+
+#Extract brite related pathway data 
+degradation =  pathway[pathway$kegg_pathway == "Peptidoglycan biosynthesis and degradation proteins", ]
+degradation_enzymes = unique(degradation$enzyme_name)
+
+################################################################################
+#Reorganize data to create read density heatmap / 2D histogram 
+
+#sum all the sample reads in brite 
+brite$reads_sum <- rowSums(brite[1:32])
+
+#check
+#sum(brite$reads_sum) ==sum(colSums(brite[ ,1:32]))
+
+#Creat matrix for reads accoridng to pathway and phylum
+
+selected_columns <- c("reads_sum", "kegg_pathway","Phylum", "kegg_type_pathway")
+# Use square bracket notation to select the specified columns
+data_phylum_brite_pathways <- brite[selected_columns]  
+
+data_phylum_brite_pathways =data_phylum_brite_pathways %>%
+  dplyr::group_by(kegg_pathway, Phylum, kegg_type_pathway)  %>%
+  summarise(reads_sum = sum(reads_sum), .groups = "drop")
+
+#sum(data_phylum_brite_pathways$reads_sum) ==sum(colSums(brite[ ,1:32]))
+#wide_data_phylum_brite_pathways =data_phylum_brite_pathways %>% pivot_wider(names_from = "Phylum", values_from = "reads_sum", values_fill = 0)
+#sum(colSums(wide_data_phylum_brite_pathways[ ,2:15])) ==sum(colSums(brite[ ,1:32]))
+
+plot_2d_heatmap <- ggplot(data_phylum_brite_pathways, aes(x = kegg_pathway, y = Phylum, fill = reads_sum)) +
+  geom_tile()  +
+  scale_fill_gradient(low = "red", high = "blue") +
+  labs(title = "Density Heatmap") +
+  theme_minimal()
+  
+
+bubble_plot= ggplot(data_phylum_brite_pathways, aes(x = Phylum, y = kegg_pathway, size = reads_sum, color = kegg_type_pathway)) +
+  geom_point() +
+  scale_size(name = "Size", range = c(7, 21)) +
+  scale_x_discrete(guide = guide_axis(angle = 45))+
+  theme(axis.text.y = element_text(angle = 45, hjust = 1))
+
+ggsave("figures/bubble_brite_pathways_phylum.png", bubble_plot,units = 'in',width=12, height=6, dpi = 1000)
+################################################################################
+#3D barplot for enzymes and species of degradation pathway 
+
+ggplot(data_phylum_brite_pathways, aes(x = Phylum, y =kegg_pathway, fill = reads_sum)) +
+  geom_raster()+
+  scale_fill_continuous(na.value = 0)
+
 
 
 ################################################################################
+
 '''''''
 pathway_other = colSums(pathway_class[pathway_class$kegg_class_pathway != "A09100 Metabolism", -c(1, 2,3)])
 pathway_other$kegg_class_pathway ="Other pathway class"
@@ -689,6 +762,8 @@ print("on species level:")
 core_community_species_names
 #plot prevalence of different phylum across most samples-
 #show prevalence of different phylum within the activated sludge microbiome of the activated sludge in SWWTP
+
+################################################################################
 
 ################################################################################
 #Plotting prevalence 
