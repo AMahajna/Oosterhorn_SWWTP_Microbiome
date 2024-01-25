@@ -109,8 +109,14 @@ row_data_genes <-
 #sample data _ goes in column data in TSE including the  
 
 process_data <- subset(process_data, select = -rarity)
+process_data[, 10] <- (process_data[, 10])/100
 #Standardize environmental data - reflect on standardization method choice 
-process_data <- decostand(process_data, method ="log")
+#process_data_normalized <- decostand(process_data, method ="standardize")
+process_data_normalized <- decostand(process_data, method ="log")
+#process_data_normalized[ , 13] =  process_data[, 10]   
+####another option 
+#process_data$`Capacity_blowers_%`= process_data$`Capacity_blowers_%`/100
+
 
 #create season column 
 samdat <- samdat  %>%
@@ -125,7 +131,7 @@ samdat <- samdat  %>%
 samdat$Year_Sample<-as.character(samdat$Year_Sample)
 samdat$Sample_Date<-as.character(samdat$Sample_Date)
 
-samdat = data.frame(cbind(samdat,process_data,(removal_efficiency[ ,3:6])/100))
+samdat = data.frame(cbind(samdat,process_data_normalized,(removal_efficiency[ ,3:6])/100))
 
 #check dim of samdat it should be: 32*33
 #dim(samdat)
@@ -394,29 +400,45 @@ data_phylum_brite_pathways =data_phylum_brite_pathways %>%
 #wide_data_phylum_brite_pathways =data_phylum_brite_pathways %>% pivot_wider(names_from = "Phylum", values_from = "reads_sum", values_fill = 0)
 #sum(colSums(wide_data_phylum_brite_pathways[ ,2:15])) ==sum(colSums(brite[ ,1:32]))
 
-plot_2d_heatmap <- ggplot(data_phylum_brite_pathways, aes(x = kegg_pathway, y = Phylum, fill = reads_sum)) +
-  geom_tile()  +
-  scale_fill_gradient(low = "red", high = "blue") +
-  labs(title = "Density Heatmap") +
-  theme_minimal()
-  
-
 bubble_plot= ggplot(data_phylum_brite_pathways, aes(x = Phylum, y = kegg_pathway, size = reads_sum, color = kegg_type_pathway)) +
   geom_point() +
-  scale_size(name = "Size", range = c(7, 21)) +
+  scale_size(name = "reads", range = c(7, 21)) +
   scale_x_discrete(guide = guide_axis(angle = 45))+
   theme(axis.text.y = element_text(angle = 45, hjust = 1))
 
-ggsave("figures/bubble_brite_pathways_phylum.png", bubble_plot,units = 'in',width=12, height=6, dpi = 1000)
+#ggsave("figures/bubble_brite_pathways_phylum.png", bubble_plot,units = 'in',width=12, height=6, dpi = 1000)
 ################################################################################
 #3D barplot for enzymes and species of degradation pathway 
-
-ggplot(data_phylum_brite_pathways, aes(x = Phylum, y =kegg_pathway, fill = reads_sum)) +
+pathway$reads_sum <- rowSums(pathway[1:32])
+df_degradation =  pathway[pathway$kegg_pathway %in% "Peptidoglycan biosynthesis and degradation proteins", ]
+heatmap_degradation = ggplot(df_degradation, aes(x = Species, y =enzyme_name, fill = reads_sum)) +
   geom_raster()+
-  scale_fill_continuous(na.value = 0)
+  scale_fill_continuous(na.value = 0)+
+  scale_x_discrete(guide = guide_axis(angle = 45))+
+  theme(axis.text.y = element_text(angle = 45, hjust = 1))
+
+p <- ggplot(df_degradation, aes(Species, enzyme_name, fill = reads_sum)) +
+  geom_tile() +
+  scale_fill_fermenter(type = "div", palette = "RdYlBu")
 
 
 
+#ggsave("figures/heatmap_degradation_enzyme_species.png", heatmap_degradation,units = 'in',width=12, height=6, dpi = 1000)
+################################################################################
+#raster for all pathways 
+pathway$reads_sum <- rowSums(pathway[1:32])
+pathway$Log10_Normalized<- log10(pathway$reads_sum)
+df_core =  pathway[pathway$Phylum %in% core_community_phylum_names, ]
+df_core_no_na <- df_core[df_core$kegg_pathway != "NA", ]
+
+ggplot(df_core_no_na, aes(x = Species, y =kegg_pathway, fill = Log10_Normalized )) +
+  geom_raster()+
+  scale_fill_gradient(low ="blue", high = "red") 
+
+df_pathway_no_na <- pathway[pathway$kegg_pathway != "NA", ]
+ggplot(df_pathway_no_na, aes(x = Domain, y =kegg_type_pathway, fill = Log10_Normalized )) +
+  geom_raster()+
+  scale_fill_gradient(low ="blue", high = "red") 
 ################################################################################
 
 '''''''
@@ -890,10 +912,21 @@ print(LibrarySize)
 dev.off() 
 
 ################################################################################
+
+process_cor = cor(process_data)
+test_processs_cor = cor.mtest(process_data,conf.level = 0.95)
+
+ggcorrplot(process_cor, hc.order = TRUE, type = "upper", lab = TRUE, 
+           outline.col = "white",
+           ggtheme = ggplot2::theme_gray,
+           colors = c("#6D9EC1", "white", "#E46726"), p.mat = test_processs_cor$p)
+
 ################################################################################
+
 #Community Similarity
 
 #the environmental (process data has been normalized)
+
 
 # Perform RDA
 tse_species <- runRDA(tse_species,
@@ -901,15 +934,15 @@ tse_species <- runRDA(tse_species,
               formula = assay ~ INF_Cl_mg_per_l + INF_COD_mg_O2_per_l + INF_Nkj_mg_N_per_l + INF_PO4o_mg_P_per_l+  INF_SO4_µg_per_l + INF_TSS_mg_per_l + Glycerol_kg +Return_sludge_m3_per_h+ Inf_Flow_m3_per_h + Capacity_blowers_. +DW_AT_g_per_l+SVI_10 + T_avg_C,
               distance = "bray",
               na.action = na.exclude)
-
+#The SVI provides an indication of how well the sludge settles in a clarifier or settling tank.
+#Hence, SVI is not important for our analysis 
 tse <- runRDA(tse,
               assay.type = "relabundance",
-              formula = assay ~ INF_Cl_mg_per_l + INF_COD_mg_O2_per_l + INF_Nkj_mg_N_per_l + INF_PO4o_mg_P_per_l+  INF_SO4_µg_per_l + INF_TSS_mg_per_l + Glycerol_kg +Return_sludge_m3_per_h+ Inf_Flow_m3_per_h + Capacity_blowers_. +DW_AT_g_per_l+SVI_10 + T_avg_C,
+              formula = assay ~  Capacity_blowers_. + INF_COD_mg_O2_per_l + INF_Nkj_mg_N_per_l + INF_PO4o_mg_P_per_l+ T_avg_C,
               distance = "bray",
               na.action = na.exclude)
 #full equatiom: overly redundant 
 #formula = assay ~ INF_Cl_mg_per_l + INF_COD_mg_O2_per_l + INF_Nkj_mg_N_per_l + INF_PO4o_mg_P_per_l+  INF_SO4_µg_per_l + INF_TSS_mg_per_l + Glycerol_kg +Return_sludge_m3_per_h+ Inf_Flow_m3_per_h + Capacity_blowers_. + DW_AT_g_per_l + SVI_10 + T_avg_C,
-
 
 # Store results of PERMANOVA test
 rda_info <- attr(reducedDim(tse, "RDA"), "significance")
@@ -924,18 +957,68 @@ rda_info$permanova |>
 rda_info$homogeneity |>
   knitr::kable()
 
+
+
+
 #visualize the weight and significance of each variable on the similarity
 #between samples with an RDA plot
 # Load packages for plotting function
 
-
 # Generate RDA plot coloured by clinical status
-plotRDA(tse, "RDA", colour_by = "Season")
-#plotRDA(tse, "RDA")
+rda_plot= plotRDA(tse, "RDA", colour_by = "Season")
+#rda_plot
+#ggsave("figures/rda_plot.png", rda_plot,units = 'in',width=12, height=6, dpi = 1000)
 #From the plot above, we can see that only age significantly describes differences 
 #between the microbial profiles of different samples 
 #Statistically significant (P < 0.05)
 
+#Note 1
+'''
+If both the Sum of Squares (Sum Sq) and Mean Squares (Mean Sq) for the homogeneity
+term in a PERMANOVA test are equal to zero, it suggests that there is no variation 
+in dispersion among the groups being compared. 
+It is important to interpret this result in the context of your specific research 
+question and dataset. While zero Sum Sq and Mean Sq indicate homogeneity of dispersion, 
+it doesnt speak to the overall differences between groups. You would typically look at
+other parts of the PERMANOVA output to assess whether there are significant differences 
+in the overall composition or means among the groups.
+
+If your primary interest is in assessing homogeneity, and you observe zero Sum
+Sq and Mean Sq, it suggests that the dispersion is consistent across groups, 
+and you may not need to adjust for differences in dispersion in your subsequent analyses. 
+However, its crucial to interpret the results in the broader context of your study
+objectives and the specific hypotheses you are testing.
+'''
+
+#Note 2
+'''
+Here are some considerations regarding when it might be acceptable to tolerate 
+heteroscedasticity in redundancy analysis:
+
+1. Small Sample Sizes:
+In situations with small sample sizes, statistical tests for heteroscedasticity
+may have low power, making it challenging to detect violations. 
+In such cases, researchers may choose to tolerate mild heteroscedasticity if the 
+sample size is limited.
+
+2. Robustness of RDA:
+Redundancy analysis is a robust technique, and it may be less sensitive to 
+violations of homoscedasticity compared to some other statistical methods. 
+If the heteroscedasticity is not severe and the assumptions of RDA are otherwise
+met, the impact on the results may be minimal.
+
+3. Exploratory Analysis:
+If the primary goal is exploratory analysis rather than hypothesis testing, 
+and heteroscedasticity does not substantially affect the interpretation of the
+results, researchers may choose to tolerate it to gain insights into the structure 
+of the data.
+
+4.Model Purpose and Context:
+The acceptability of heteroscedasticity depends on the specific goals of your
+analysis and the context of your research. If the presence of heteroscedasticity
+does not undermine the validity of your conclusions or the interpretability of 
+your results, it may be acceptable in certain situations.
+'''
 
 ################################################################################
 library(stringr)
